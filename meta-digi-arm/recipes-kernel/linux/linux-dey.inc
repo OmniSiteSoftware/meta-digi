@@ -1,4 +1,4 @@
-# Copyright (C) 2018-2024, Digi International Inc.
+# Copyright (C) 2018-2024 Digi International
 SUMMARY = "Linux kernel for Digi boards"
 LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=6bc538ed5bd9a7fc9398086aedcd7e46"
@@ -11,15 +11,19 @@ require ${@oe.utils.conditional('TRUSTFENCE_SIGN', '1', 'recipes-kernel/linux/li
 DEPENDS += "${@oe.utils.conditional('DEY_SOC_VENDOR', 'NXP', 'lzop-native', '', d)}"
 
 # Select internal or Github Linux repo
-LINUX_URI_STASH = "${DIGI_MTK_GIT}/linux/linux.git;protocol=ssh"
-LINUX_URI_GITHUB = "${DIGI_GITHUB_GIT}/linux.git;protocol=https"
+LINUX_URI_STASH = "git@github.com:OmniSiteSoftware/linux-kernel-yocto.git;protocol=ssh;name=kernel"
+LINUX_URI_GITHUB = "https://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;name=kernel"
 LINUX_GIT_URI ?= "${@oe.utils.conditional('DIGI_INTERNAL_GIT', '1', '${LINUX_URI_STASH}', '${LINUX_URI_GITHUB}', d)}"
 SRC_URI = " \
-    ${LINUX_GIT_URI};branch=${SRCBRANCH} \
+    git://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;branch=master;name=kernel \
     ${@oe.utils.conditional('KERNEL_DEFCONFIG', '', 'file://defconfig', '', d)} \
     ${@bb.utils.contains('DISTRO_FEATURES', 'virtualization', 'file://docker_conf.cfg', '', d)} \
     ${@oe.utils.vartrue('TRUSTFENCE_FILE_BASED_ENCRYPT', 'file://fscrypt.cfg', '', d)} \
 "
+
+SRCREV_kernel = "eeaad9f2da8a4110986d909837c026ea056f0b97" 
+SRCREV_FORMAT = "kernel"
+
 S = "${WORKDIR}/git"
 
 LOCALVERSION = "-dey"
