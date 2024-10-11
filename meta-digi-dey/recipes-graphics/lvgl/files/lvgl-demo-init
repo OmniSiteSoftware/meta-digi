@@ -13,11 +13,11 @@
 #
 #===============================================================================
 
-readonly DEMO_NAME="lvgl_demo"
-readonly DEMO_PATH="/usr/bin/${DEMO_NAME}"
-readonly DEMO_TITLE="LVGL Demo Application"
-readonly DEMO_DISPLAY="##LVGL_DEMO_DISPLAY##"
-readonly DEMO_ENV="##LVGL_DEMO_ENV##"
+readonly DEMO_NAME="wings_app"
+readonly DEMO_PATH="/home/root/${DEMO_NAME}"
+readonly DEMO_TITLE="Wings Application"
+readonly DEMO_DISPLAY="wayland-1"
+readonly DEMO_ENV="DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=${DEMO_DISPLAY}"
 readonly PID_FILE="/run/${DEMO_NAME}.pid"
 
 log() {
@@ -88,16 +88,19 @@ stop() {
 
 start() {
 	check_is_running && { log warning "start: ${DEMO_NAME} ALREADY running"; exit 0; }
+	wait_for_wayland
+    killall weston
 
-	if [ -d "/usr/share/wayland" ]; then
-		wait_for_wayland
-	else
-		# Disable the cursor when displaying at full screen on fbdev
-		echo "0" > /sys/class/graphics/fbcon/cursor_blink
-	fi
+	systemctl stop cccs-gs-demo
+
+	# Disable the cursor when displaying at full screen on fbdev
+	echo "0" > /sys/class/graphics/fbcon/cursor_blink
+
+	#fbset -xres 800 -yres 480
+	
 
 	# Launch demo
-	env ${DEMO_ENV} ${DEMO_PATH} >/dev/null 2>&1 &
+	env ${DEMO_PATH} >/dev/null 2>&1 &
 
 	if [ $? -eq 0 ]; then
 		echo $! > ${PID_FILE}

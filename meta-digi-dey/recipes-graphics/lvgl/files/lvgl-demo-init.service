@@ -7,7 +7,7 @@ Requires=##WESTON_SERVICE##
 
 [Service]
 Type=forking
-PIDFile=/run/lvgl_demo.pid
+PIDFile=/run/wings_app.pid
 ExecStart=/etc/lvgl-demo-init start
 ExecStop=/etc/lvgl-demo-init stop
 
