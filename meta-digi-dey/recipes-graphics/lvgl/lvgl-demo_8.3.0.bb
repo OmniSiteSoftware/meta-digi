@@ -1,71 +1,96 @@
-SUMMARY = "LVGL Demo Application"
+SUMMARY = "Wing Application"
 HOMEPAGE = "https://github.com/digi-embedded/lv_port_linux_frame_buffer"
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=802d3d83ae80ef5f343050bf96cce3a4 \
-                    file://lv_drivers/LICENSE;md5=d6fc0df890c5270ef045981b516bb8f2 \
                     file://lvgl/LICENCE.txt;md5=bf1198c89ae87f043108cea62460b03a"
 
-SRCBRANCH ?= "dey/master"
+SRCBRANCH ?= "ishanya-lvgl"
 
 SRC_URI = " \
-    gitsm://github.com/digi-embedded/lv_port_linux_frame_buffer.git;branch=${SRCBRANCH};protocol=https \
+    gitsm://github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=https \
     file://lvgl-demo-init \
     file://lvgl-demo-init.service \
+    file://cert \
 "
-SRCREV = "0a799d22a5aaf9de18aca428579945a0a9c2c270"
 
+# Always fetch the latest commit from the branch.
+SRCREV = "${AUTOREV}"
+PV = "1.0+git${SRCPV}"
+
+# Use the Makefile build system.
 EXTRA_OEMAKE = "DESTDIR=${D}"
 
-# By default, use wayland backend if possible.
-# If unavailable, fall back to a secondary backend
+inherit pkgconfig update-rc.d systemd
+
+DEPENDS += "\
+    ffmpeg curl openssl json-c wayland libxkbcommon \
+    libpng swupdate libconfuse recovery-utils libubootenv \
+    libgpiod libsoc libdigiapix cccs \
+    glib-2.0 \
+    gstreamer1.0 \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-rtsp-server "
+
+# Backend configuration variables.
 MINIMAL_BACKEND ?= "fbdev"
 MINIMAL_BACKEND:imxdrm = "drm"
 MINIMAL_BACKEND:ccmp15 = "sdl"
 PACKAGECONFIG = "${@bb.utils.contains('DISTRO_FEATURES', 'wayland', 'wayland', '${MINIMAL_BACKEND}', d)}"
 
-require lv-drivers.inc
+# Inherit classes for systemd service and init script handling.
+inherit update-rc.d systemd
 
-inherit cmake systemd update-rc.d
-
+# Set the source directory to the git checkout.
 S = "${WORKDIR}/git"
 
+# Provide additional include paths.
 TARGET_CFLAGS += "-I${STAGING_INCDIR}/libdrm"
 
-# Change DRM card used for i.MX8-based platforms
+# Change DRM card used for i.MX8-based platforms.
 LVGL_CONFIG_DRM_CARD:mx8-generic-bsp = "/dev/dri/card1"
 
+# Display resolution configuration.
 LVGL_CONFIG_HOR_RES ?= "800"
 LVGL_CONFIG_VER_RES ?= "480"
 LVGL_CONFIG_HOR_RES:ccimx6ul ?= "1280"
 LVGL_CONFIG_VER_RES:ccimx6ul ?= "800"
 
-do_configure:prepend() {
-	if [ "${LVGL_CONFIG_USE_DRM}" -eq 1 ] ; then
-		# Add libdrm build dependency
-		sed -i '/^target_link_libraries/ s@lvgl::drivers@& drm@' "${S}/CMakeLists.txt"
-	fi
-
-	if [ "${LVGL_CONFIG_USE_SDL}" -eq 1 ] ; then
-		# Add libsdl build dependency
-		sed -i '/^target_link_libraries/ s@lvgl::drivers@& SDL2@' "${S}/CMakeLists.txt"
-	fi
-
-	if [ "${LVGL_CONFIG_USE_WAYLAND}" -eq 1 ] ; then
-		# Add wayland build dependencies
-		sed -i '/^target_link_libraries/ s@lvgl::drivers@& wayland-client wayland-cursor xkbcommon@' "${S}/CMakeLists.txt"
-	fi
-
-	# Configure the app's dimensions
-	sed -e "s|\(^#define *LV_DRV_DISP_HOR_RES *\).*|\1${LVGL_CONFIG_HOR_RES}|g" \
-	    -e "s|\(^#define *LV_DRV_DISP_VER_RES *\).*|\1${LVGL_CONFIG_VER_RES}|g" \
-	    \
-	    -i "${S}/lv_drv_conf.h"
+# Disable the configuration step (if any).
+do_configure() {
+    :
+    
 }
 
+# Modified do_compile that only does a clean build if the Git revision has changed.
+do_compile() {
+    # Use a persistent file in WORKDIR to record the last built revision.
+    if [ -f ${WORKDIR}/.last_srcrev ]; then
+        LAST_SRCREV=$(cat ${WORKDIR}/.last_srcrev)
+    else
+        LAST_SRCREV=""
+    fi
+
+    # If the Git revision has changed, perform a clean build.
+    if [ "${SRCREV}" != "${LAST_SRCREV}" ]; then
+        oe_runmake clean
+    fi
+
+    oe_runmake -j || die "Makefile build failed"
+
+    # Record the current Git revision.
+    echo "${SRCREV}" > ${WORKDIR}/.last_srcrev
+}
+
+# Weston service names for different targets.
 WESTON_SERVICE ?= "weston.service"
 WESTON_SERVICE:ccmp15 ?= "weston-launch.service"
 WESTON_SERVICE:ccmp2 ?= "weston-launch.service"
 
+# LVGL demo display and environment settings.
 LVGL_DEMO_DISPLAY ?= "wayland-0"
 LVGL_DEMO_DISPLAY:ccmp15 ?= "wayland-1"
 LVGL_DEMO_DISPLAY:ccmp2 ?= "wayland-1"
@@ -74,32 +99,41 @@ LVGL_DEMO_ENV ?= "DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=\$\{D
 LVGL_DEMO_ENV:ccimx6ul ?= ""
 
 do_install:append() {
-	install -d ${D}${bindir}
-	install -m 0755 ${B}/lvgl_fb ${D}${bindir}/lvgl_demo
+    # Install the binary built by the Makefile.
+    install -d ${D}/home/root
+    install -m 0755 ${B}/wings_app ${D}/home/root/wings_app
+    
+    # Create the target directory for certificates and copy all files.
+    install -d ${D}/home/root/cert
+    cp -r ${WORKDIR}/cert/* ${D}/home/root/cert/
+    # Set all certificate files to read-only (0444) and directories to 0555.
+    find ${D}/home/root/cert -type f -exec chmod 0444 {} \;
+    find ${D}/home/root/cert -type d -exec chmod 0555 {} \;
 
-	# Install systemd service
-	if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
-		# Install systemd unit files
-		install -d ${D}${systemd_unitdir}/system
-		install -m 0644 ${WORKDIR}/lvgl-demo-init.service ${D}${systemd_unitdir}/system/
-		sed -i -e "s,##WESTON_SERVICE##,${WESTON_SERVICE},g" \
-			"${D}${systemd_unitdir}/system/lvgl-demo-init.service"
-	fi
+    # Install systemd service unit if systemd is enabled.
+    if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
+        install -d ${D}${systemd_unitdir}/system
+        install -m 0644 ${WORKDIR}/lvgl-demo-init.service ${D}${systemd_unitdir}/system/
+        sed -i -e "s,##WESTON_SERVICE##,${WESTON_SERVICE},g" \
+               "${D}${systemd_unitdir}/system/lvgl-demo-init.service"
+    fi
 
-	# Install wrapper bootscript to launch LVGL demo on boot
-	install -d ${D}${sysconfdir}/init.d
-	install -m 0755 ${WORKDIR}/lvgl-demo-init ${D}${sysconfdir}/lvgl-demo-init
-	sed -i -e "s@##LVGL_DEMO_DISPLAY##@${LVGL_DEMO_DISPLAY}@g" \
-		   -e "s@##LVGL_DEMO_ENV##@${LVGL_DEMO_ENV}@g" \
-		   "${D}${sysconfdir}/lvgl-demo-init"
-	ln -sf ${sysconfdir}/lvgl-demo-init ${D}${sysconfdir}/init.d/lvgl-demo-init
+    # Install the init script that launches the LVGL demo on boot.
+    install -d ${D}${sysconfdir}/init.d
+    install -m 0755 ${WORKDIR}/lvgl-demo-init ${D}${sysconfdir}/lvgl-demo-init
+    sed -i -e "s@##LVGL_DEMO_DISPLAY##@${LVGL_DEMO_DISPLAY}@g" \
+           -e "s@##LVGL_DEMO_ENV##@${LVGL_DEMO_ENV}@g" \
+           "${D}${sysconfdir}/lvgl-demo-init"
+    ln -sf ${sysconfdir}/lvgl-demo-init ${D}${sysconfdir}/init.d/lvgl-demo-init
 }
 
-PACKAGES =+ "${PN}-init"
+PACKAGES += "${PN}-init"
 FILES:${PN}-init = " \
     ${sysconfdir}/lvgl-demo-init \
     ${sysconfdir}/init.d/lvgl-demo-init \
     ${systemd_unitdir}/system/lvgl-demo-init.service \
+    /home/root/cert/ \
+    /home/root/wings_app \
 "
 
 INITSCRIPT_PACKAGES += "${PN}-init"

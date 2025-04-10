@@ -19,7 +19,7 @@ readonly DEMO_TITLE="Wings Application"
 readonly DEMO_DISPLAY="wayland-1"
 readonly DEMO_ENV="DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=${DEMO_DISPLAY}"
 readonly PID_FILE="/run/${DEMO_NAME}.pid"
-
+readonly UPDATE_DIR="/mnt/update"
 log() {
 	if type "systemd-cat" >/dev/null 2>/dev/null; then
 		systemd-cat -p "${1}" -t "${DEMO_NAME}" printf "%s" "${2}"
@@ -90,6 +90,14 @@ start() {
 	check_is_running && { log warning "start: ${DEMO_NAME} ALREADY running"; exit 0; }
 	wait_for_wayland
     killall weston
+
+	if [ ! -d "$UPDATE_DIR" ]; then
+		echo "Directory $UPDATE_DIR does not exist. Creating it..."
+		mkdir -p "$UPDATE_DIR"
+		echo "Directory created."
+	else
+		echo "Directory $UPDATE_DIR already exists."
+	fi
 
 	systemctl stop cccs-gs-demo
 
