@@ -24,6 +24,7 @@ SRC_URI = " \
     file://cccsd.service \
     file://cccs-gs-demo-init \
     file://cccs-gs-demo.service \
+    file://cccs.conf \
 "
 SRC_URI:append = "${@oe.utils.ifelse(d.getVar('CCCS_CONF_PATH'), \
                      oe.utils.ifelse(d.getVar('CCCS_CONF_PATH').startswith('/'), "file://%s" % d.getVar('CCCS_CONF_PATH'), d.getVar('CCCS_CONF_PATH')), '')}"
@@ -72,7 +73,7 @@ do_install() {
 		else
 			CONF="${WORKDIR}/$(basename ${CONF})"
 		fi
-		install -m 0644 "${CONF}" ${D}${sysconfdir}/cccs.conf
+		install -m 0644 ${WORKDIR}/cccs.conf ${D}${sysconfdir}/cccs.conf
 	else
 		# Set the device type. Its maximum length is 255 characters
 		[ -z "${CCCS_DEVICE_TYPE}" ] && device_type="${MACHINE}" || device_type="${CCCS_DEVICE_TYPE}"

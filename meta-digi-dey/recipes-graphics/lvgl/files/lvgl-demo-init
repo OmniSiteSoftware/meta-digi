@@ -14,7 +14,7 @@
 #===============================================================================
 
 readonly DEMO_NAME="wings_app"
-readonly DEMO_PATH="/home/root/${DEMO_NAME}"
+readonly DEMO_PATH="/etc/${DEMO_NAME}"
 readonly DEMO_TITLE="Wings Application"
 readonly DEMO_DISPLAY="wayland-1"
 readonly DEMO_ENV="DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=${DEMO_DISPLAY}"
@@ -105,7 +105,7 @@ start() {
 	echo "0" > /sys/class/graphics/fbcon/cursor_blink
 
 	#fbset -xres 800 -yres 480
-	
+	#test
 
 	# Launch demo
 	env ${DEMO_PATH} >/dev/null 2>&1 &

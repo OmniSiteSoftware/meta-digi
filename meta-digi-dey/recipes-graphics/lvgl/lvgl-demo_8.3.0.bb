@@ -4,7 +4,7 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=802d3d83ae80ef5f343050bf96cce3a4 \
                     file://lvgl/LICENCE.txt;md5=bf1198c89ae87f043108cea62460b03a"
 
-SRCBRANCH ?= "ishanya-lvgl"
+SRCBRANCH ?= "ishanya-lvgl-yocto"
 
 SRC_URI = " \
     gitsm://github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=https \
@@ -100,15 +100,15 @@ LVGL_DEMO_ENV:ccimx6ul ?= ""
 
 do_install:append() {
     # Install the binary built by the Makefile.
-    install -d ${D}/home/root
-    install -m 0755 ${B}/wings_app ${D}/home/root/wings_app
+    install -d ${D}/etc
+    install -m 0755 ${B}/wings_app ${D}/etc/wings_app
     
     # Create the target directory for certificates and copy all files.
-    install -d ${D}/home/root/cert
-    cp -r ${WORKDIR}/cert/* ${D}/home/root/cert/
+    install -d ${D}/etc/cert
+    cp -r ${WORKDIR}/cert/* ${D}/etc/cert/
     # Set all certificate files to read-only (0444) and directories to 0555.
-    find ${D}/home/root/cert -type f -exec chmod 0444 {} \;
-    find ${D}/home/root/cert -type d -exec chmod 0555 {} \;
+    find ${D}/etc/cert -type f -exec chmod 0444 {} \;
+    find ${D}/etc/cert -type d -exec chmod 0555 {} \;
 
     # Install systemd service unit if systemd is enabled.
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
@@ -132,8 +132,8 @@ FILES:${PN}-init = " \
     ${sysconfdir}/lvgl-demo-init \
     ${sysconfdir}/init.d/lvgl-demo-init \
     ${systemd_unitdir}/system/lvgl-demo-init.service \
-    /home/root/cert/ \
-    /home/root/wings_app \
+    /etc/cert/ \
+    /etc/wings_app \
 "
 
 INITSCRIPT_PACKAGES += "${PN}-init"
