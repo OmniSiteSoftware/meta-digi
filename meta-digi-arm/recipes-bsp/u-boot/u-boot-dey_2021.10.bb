@@ -7,11 +7,17 @@ DEPENDS += "flex-native bison-native"
 DEPENDS += "python3-setuptools-native"
 
 SRCBRANCH = "v2021.10/maint"
-SRCREV = "${AUTOREV}"
+#SRCREV = "${AUTOREV}"
 
-SRC_URI += " \
+#SRCBRANCH = "read_only_uboot"
+#SRCREV = "${AUTOREV}"
+
+SRC_URI = " \
+    ${UBOOT_URI_GITHUB};branch=${SRCBRANCH};name=bootloader \
     ${@oe.utils.conditional('TRUSTFENCE_SIGN_FIT_STM', '1', 'file://fit_signature.cfg', '', d)} \
 "
+SRCREV_bootloader =  "${AUTOREV}"
+SRCREV_FORMAT = "bootloader"
 
 install_helper_files() {
 	# Install dtbs from UBOOT_DEVICETREE to datadir, so that kernel

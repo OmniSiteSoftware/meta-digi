@@ -16,8 +16,9 @@ S = "${WORKDIR}/git"
 B = "${WORKDIR}/build"
 
 # Select internal or Github U-Boot repo
-UBOOT_URI_STASH = "${DIGI_MTK_GIT}/uboot/u-boot-denx.git;protocol=ssh"
-UBOOT_URI_GITHUB = "${DIGI_GITHUB_GIT}/u-boot.git;protocol=https"
+
+UBOOT_URI_STASH = "git@github.com:OmniSiteSoftware/u-boot.git;protocol=ssh"
+UBOOT_URI_GITHUB = "git://github.com/OmniSiteSoftware/u-boot.git;protocol=https"
 UBOOT_GIT_URI ?= "${@oe.utils.conditional('DIGI_INTERNAL_GIT', '1' , '${UBOOT_URI_STASH}', '${UBOOT_URI_GITHUB}', d)}"
 
 INSTALL_FW_UBOOT_SCRIPTS = " \
@@ -27,10 +28,14 @@ INSTALL_FW_UBOOT_SCRIPTS = " \
 "
 
 SRC_URI = " \
-    ${UBOOT_GIT_URI};branch=${SRCBRANCH} \
+    ${UBOOT_URI_GITHUB};branch=read_only_uboot;name=bootloader \
     file://boot.txt \
     ${INSTALL_FW_UBOOT_SCRIPTS} \
 "
+
+SRCREV_bootloader = "${AUTOREV}"
+SRCREV_FORMAT = "bootloader"
+
 
 BUILD_UBOOT_SCRIPTS ?= "true"
 

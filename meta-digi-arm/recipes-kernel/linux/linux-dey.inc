@@ -21,7 +21,7 @@ SRC_URI = " \
     ${@oe.utils.vartrue('TRUSTFENCE_FILE_BASED_ENCRYPT', 'file://fscrypt.cfg', '', d)} \
 "
 
-SRCREV_kernel = "eeaad9f2da8a4110986d909837c026ea056f0b97" 
+SRCREV_kernel =  "${AUTOREV}"
 SRCREV_FORMAT = "kernel"
 
 S = "${WORKDIR}/git"
