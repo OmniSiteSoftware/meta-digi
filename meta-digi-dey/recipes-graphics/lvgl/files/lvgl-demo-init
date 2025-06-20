@@ -144,7 +144,7 @@ case "$1" in
 		echo "done."
 		;;
 	stop)
-		#stop
+		stop
 		echo -n "Stopping ${DEMO_TITLE}: "
 		if [ -n "`/bin/pidof ${DEMO_PATH}`" ] ; then
 			echo "FAIL"
