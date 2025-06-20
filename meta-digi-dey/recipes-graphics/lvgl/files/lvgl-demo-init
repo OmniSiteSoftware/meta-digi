@@ -104,29 +104,37 @@ start() {
 	# Disable the cursor when displaying at full screen on fbdev
     echo "0" > /sys/class/graphics/fbcon/cursor_blink
 
-    #fbset -xres 800 -yres 480
+        #fbset -xres 800 -yres 480
     LOG_FILE="/var/log/application_log"
     MAX_LOG_SIZE=5120
 
-    # Step 0: Always delete old log and start clean
-    : > "$LOG_FILE"  # Truncate file or create if it doesn't exist
+    # Step 0: Reset the log
+    : > "${LOG_FILE}"
 
-    # Step 1: Write log lines
-    echo "[$(date)] Launching ${DEMO_NAME} from ${DEMO_PATH}" >> "$LOG_FILE"
+    # Step 1: Header
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching ${DEMO_NAME} from ${DEMO_PATH}" >> "${LOG_FILE}"
 
-    env ${DEMO_PATH} >> "$LOG_FILE" 2>&1
+    # Step 2: Start the demo in background, capture its PID
+    env ${DEMO_ENV} "${DEMO_PATH}" >> "${LOG_FILE}" 2>&1 &
+    DEMO_PID=$!
+    echo "${DEMO_PID}" > "${PID_FILE}"
 
-    if [ $? -eq 0 ]; then
-        echo "[$(date)] ${DEMO_NAME} started with PID $$" >> "$LOG_FILE"
+    # Step 3: Log whether it actually started
+    if kill -0 "${DEMO_PID}" >/dev/null 2>&1; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${DEMO_NAME} started with PID ${DEMO_PID}" >> "${LOG_FILE}"
     else
-        echo "[$(date)] Failed to start ${DEMO_NAME}" >> "$LOG_FILE"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Failed to start ${DEMO_NAME}" >> "${LOG_FILE}"
     fi
 
-    # Step 2: Enforce 512-byte cap
-    FILE_SIZE=$(stat -c%s "$LOG_FILE")
-    if [ "$FILE_SIZE" -gt "$MAX_LOG_SIZE" ]; then
-        tail -c $MAX_LOG_SIZE "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+    # Step 4: Enforce MAX_LOG_SIZE cap
+    if [ -f "${LOG_FILE}" ]; then
+        FILE_SIZE=$(stat -c%s "${LOG_FILE}")
+        if [ "${FILE_SIZE}" -gt "${MAX_LOG_SIZE}" ]; then
+            tail -c "${MAX_LOG_SIZE}" "${LOG_FILE}" > "${LOG_FILE}.tmp" \
+              && mv "${LOG_FILE}.tmp" "${LOG_FILE}"
+        fi
     fi
+
 }
 
 case "$1" in
@@ -136,7 +144,7 @@ case "$1" in
 		echo "done."
 		;;
 	stop)
-		stop
+		#stop
 		echo -n "Stopping ${DEMO_TITLE}: "
 		if [ -n "`/bin/pidof ${DEMO_PATH}`" ] ; then
 			echo "FAIL"

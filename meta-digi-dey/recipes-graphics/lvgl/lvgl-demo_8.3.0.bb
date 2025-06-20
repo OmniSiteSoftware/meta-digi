@@ -7,7 +7,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=802d3d83ae80ef5f343050bf96cce3a4 \
 SRCBRANCH ?= "ishanya-lvgl"
 
 SRC_URI = " \
-    gitsm://github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=https \
+    gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
     file://lvgl-demo-init \
     file://lvgl-demo-init.service \
     file://cert \

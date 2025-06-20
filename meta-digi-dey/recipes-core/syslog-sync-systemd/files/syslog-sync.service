@@ -1,0 +1,7 @@
+[Unit]
+Description=Append-only syslog backup to USB/SD
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/syslog-sync.sh
