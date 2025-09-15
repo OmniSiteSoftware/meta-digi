@@ -15,7 +15,7 @@ LINUX_URI_STASH = "git@github.com:OmniSiteSoftware/linux-kernel-yocto.git;protoc
 LINUX_URI_GITHUB = "https://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;name=kernel"
 LINUX_GIT_URI ?= "${@oe.utils.conditional('DIGI_INTERNAL_GIT', '1', '${LINUX_URI_STASH}', '${LINUX_URI_GITHUB}', d)}"
 SRC_URI = " \
-    git://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;branch=master;name=kernel \
+    git://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;branch=kernel-mipi;name=kernel \
     ${@oe.utils.conditional('KERNEL_DEFCONFIG', '', 'file://defconfig', '', d)} \
     ${@bb.utils.contains('DISTRO_FEATURES', 'virtualization', 'file://docker_conf.cfg', '', d)} \
     ${@oe.utils.vartrue('TRUSTFENCE_FILE_BASED_ENCRYPT', 'file://fscrypt.cfg', '', d)} \
