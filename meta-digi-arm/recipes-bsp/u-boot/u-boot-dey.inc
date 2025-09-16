@@ -20,6 +20,7 @@ B = "${WORKDIR}/build"
 UBOOT_URI_STASH = "git@github.com:OmniSiteSoftware/u-boot.git;protocol=ssh"
 UBOOT_URI_GITHUB = "git://github.com/OmniSiteSoftware/u-boot.git;protocol=https"
 UBOOT_GIT_URI ?= "${@oe.utils.conditional('DIGI_INTERNAL_GIT', '1' , '${UBOOT_URI_STASH}', '${UBOOT_URI_GITHUB}', d)}"
+SRCBRANCH = "v2021.10/maint"
 
 INSTALL_FW_UBOOT_SCRIPTS = " \
     file://install_linux_fw_sd.txt \
@@ -28,7 +29,7 @@ INSTALL_FW_UBOOT_SCRIPTS = " \
 "
 
 SRC_URI = " \
-    ${UBOOT_URI_GITHUB};branch=read_only_uboot;name=bootloader \
+    ${UBOOT_URI_GITHUB};branch=${SRCBRANCH};name=bootloader \ 
     file://boot.txt \
     ${INSTALL_FW_UBOOT_SCRIPTS} \
 "

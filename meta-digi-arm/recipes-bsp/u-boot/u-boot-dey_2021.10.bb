@@ -12,8 +12,7 @@ SRCBRANCH = "v2021.10/maint"
 #SRCBRANCH = "read_only_uboot"
 #SRCREV = "${AUTOREV}"
 
-SRC_URI = " \
-    ${UBOOT_URI_GITHUB};branch=${SRCBRANCH};name=bootloader \
+SRC_URI += " \
     ${@oe.utils.conditional('TRUSTFENCE_SIGN_FIT_STM', '1', 'file://fit_signature.cfg', '', d)} \
 "
 SRCREV_bootloader =  "${AUTOREV}"
