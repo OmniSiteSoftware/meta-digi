@@ -4,7 +4,7 @@ DEPENDS += "${@oe.utils.conditional('DISTRO_FEATURES', 'pulseaudio', 'pulseaudio
 
 SRC_URI += " \
             file://weston.ini \
-            file://digi_background.png \
+            file://omnisite_background_vertical.png \
             file://weston-launch.service \
             file://weston-checkgpu.service \
             file://weston_profile.sh \
@@ -34,7 +34,7 @@ do_install:append() {
 
     install -m 0644 ${WORKDIR}/weston.ini ${D}${sysconfdir}/xdg/weston
 
-    install -m 0644 ${WORKDIR}/digi_background.png ${D}${datadir}/weston/backgrounds/digi_background.png
+    install -m 0644 ${WORKDIR}/omnisite_background_vertical.png ${D}${datadir}/weston/backgrounds/omnisite_background_vertical.png
     printf "\n[launcher]\nicon=${datadir}/weston/terminal.png\npath=${bindir}/weston-terminal\n" >> ${D}${sysconfdir}/xdg/weston/weston.ini
 
     install -d ${D}${systemd_system_unitdir} ${D}${sbindir}
