@@ -21,69 +21,69 @@ readonly DEMO_ENV="DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=${DE
 readonly PID_FILE="/run/${DEMO_NAME}.pid"
 readonly UPDATE_DIR="/mnt/update"
 log() {
-	if type "systemd-cat" >/dev/null 2>/dev/null; then
-		systemd-cat -p "${1}" -t "${DEMO_NAME}" printf "%s" "${2}"
-	fi
-	logger -p "${1}" -t "${DEMO_NAME}" "${2}"
+    if type "systemd-cat" >/dev/null 2>/dev/null; then
+        systemd-cat -p "${1}" -t "${DEMO_NAME}" printf "%s" "${2}"
+    fi
+    logger -p "${1}" -t "${DEMO_NAME}" "${2}"
 }
 
 get_demo_pid() {
-	local pid="$(pgrep -f ${DEMO_PATH})"
+    local pid="$(pgrep -f ${DEMO_PATH})"
 
-	[ -n "${pid}" ] && { echo "${pid}"; return 0; }
+    [ -n "${pid}" ] && { echo "${pid}"; return 0; }
 
-	return 1
+    return 1
 }
 
 check_is_running() {
-	local pid
+    local pid
 
-	if [ -s "${PID_FILE}" ]; then
-		pid="$(cat ${PID_FILE})"
-	else
-		pid="$(get_demo_pid)"
-		echo "${pid}" > ${PID_FILE}
-	fi
+    if [ -s "${PID_FILE}" ]; then
+        pid="$(cat ${PID_FILE})"
+    else
+        pid="$(get_demo_pid)"
+        echo "${pid}" > ${PID_FILE}
+    fi
 
-	if [ "${pid}" ]; then
-		kill -0 "${pid}" >/dev/null 2>&1 && return 0
-	fi
+    if [ "${pid}" ]; then
+        kill -0 "${pid}" >/dev/null 2>&1 && return 0
+    fi
 
-	rm -f "${PID_FILE}"
+    rm -f "${PID_FILE}"
 
-	return 1
+    return 1
 }
 
 wait_for_wayland() {
-	local count=20
-	local wayland_socket="/run/user/0/${DEMO_DISPLAY}"
+    local count=20
+    local wayland_socket="/run/user/0/${DEMO_DISPLAY}"
 
-	while [ ! -S "${wayland_socket}" ]; do
-		sleep 1
-		count=$((count-1))
+    while [ ! -S "${wayland_socket}" ]; do
+        sleep 1
+        count=$((count-1))
 		if [ "${count}" = 0 ]; then
 			return 1
 		fi
-	done
-	sleep 1
-	return 0
+    done
+    sleep 1
+    return 0
 }
 
 stop() {
-	check_is_running || return
+    check_is_running || return
 
-	local pid="$(cat ${PID_FILE})"
-	kill -TERM "${pid}" >/dev/null 2>&1
+    local pid="$(cat ${PID_FILE})"
+    kill -TERM "${pid}" >/dev/null 2>&1
 
-	local STOP_TIMEOUT="5"
-	for i in $(seq ${STOP_TIMEOUT}); do
-		check_is_running || { log info "stopped"; break; }
-		if [ "${i}" -eq ${STOP_TIMEOUT} ]; then
-			log warning "stop: ${DEMO_NAME} did not stop gracefully"
-			kill -KILL "${pid}" >/dev/null 2>&1
-		fi
-		sleep 1
-	done
+    local STOP_TIMEOUT="5"
+    for i in $(seq ${STOP_TIMEOUT}); do
+        check_is_running || { log info "stopped"; break; }
+        if [ "${i}" -eq ${STOP_TIMEOUT} ]; then
+            log warning "stop: ${DEMO_NAME} did not stop gracefully"
+            kill -KILL "${pid}" >/dev/null 2>&1
+        fi
+        sleep 1
+    done
 }
 
 start() {
@@ -91,13 +91,13 @@ start() {
     wait_for_wayland
     #killall weston
 
-	if [ ! -d "$UPDATE_DIR" ]; then
-		echo "Directory $UPDATE_DIR does not exist. Creating it..."
-		mkdir -p "$UPDATE_DIR"
-		echo "Directory created."
-	else
-		echo "Directory $UPDATE_DIR already exists."
-	fi
+    if [ ! -d "$UPDATE_DIR" ]; then
+        echo "Directory $UPDATE_DIR does not exist. Creating it..."
+        mkdir -p "$UPDATE_DIR"
+        echo "Directory created."
+    else
+        echo "Directory $UPDATE_DIR already exists."
+    fi
 
     systemctl stop cccs-gs-demo
 
@@ -107,11 +107,11 @@ start() {
     #fbset -xres 800 -yres 480
 	
 	# Modify the IPv4 route metric for eth0
-	if nmcli connection modify "eth0" ipv4.route-metric 1000; then
-		echo "[OK] Successfully updated route metric for eth0 to 1000."
-	else
-		echo "[ERROR] Failed to update route metric for eth0." >&2
-	fi
+    if nmcli connection modify "eth0" ipv4.route-metric 1000; then
+        echo "[OK] Successfully updated route metric for eth0 to 1000."
+    else
+        echo "[ERROR] Failed to update route metric for eth0." >&2
+    fi
 
     LOG_FILE="/var/log/application_log"
     MAX_LOG_SIZE=5120
@@ -133,40 +133,30 @@ start() {
     else
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Failed to start ${DEMO_NAME}" >> "${LOG_FILE}"
     fi
-
-    # Step 4: Enforce MAX_LOG_SIZE cap
-    if [ -f "${LOG_FILE}" ]; then
-        FILE_SIZE=$(stat -c%s "${LOG_FILE}")
-        if [ "${FILE_SIZE}" -gt "${MAX_LOG_SIZE}" ]; then
-            tail -c "${MAX_LOG_SIZE}" "${LOG_FILE}" > "${LOG_FILE}.tmp" \
-              && mv "${LOG_FILE}.tmp" "${LOG_FILE}"
-        fi
-    fi
-
 }
 
 case "$1" in
-	start)
-		echo -n "Starting ${DEMO_TITLE}: "
-		start
-		echo "done."
-		;;
-	stop)
-		stop
-		echo -n "Stopping ${DEMO_TITLE}: "
+    start)
+        echo -n "Starting ${DEMO_TITLE}: "
+        start
+        echo "done."
+        ;;
+    stop)
+        stop
+        echo -n "Stopping ${DEMO_TITLE}: "
 		if [ -n "`/bin/pidof ${DEMO_PATH}`" ] ; then
-			echo "FAIL"
-		else
-			echo "OK"
-		fi
-		;;
-	restart)
-		stop
-		sleep 1
-		start
-		;;
-	*)
-		echo "Usage: $0 {start|stop|restart}"
-		exit 1
-		;;
+            echo "FAIL"
+        else
+            echo "OK"
+        fi
+        ;;
+    restart)
+        stop
+        sleep 1
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
 esac
