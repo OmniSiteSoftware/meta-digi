@@ -89,7 +89,7 @@ stop() {
 start() {
     check_is_running && { log warning "start: ${DEMO_NAME} ALREADY running"; exit 0; }
     wait_for_wayland
-    killall weston
+    #killall weston
 
     if [ ! -d "$UPDATE_DIR" ]; then
         echo "Directory $UPDATE_DIR does not exist. Creating it..."
