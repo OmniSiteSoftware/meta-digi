@@ -148,6 +148,6 @@ echo "$CUR" > "$OFF"
 # 8) Finalize
 # ------------------------------
 sync
-echo 1 > /proc/sys/vm/drop_caches
+echo 1 > /proc/sys/vm/drop_caches >/dev/null 2>&1
 #umount "$MNT"
 log "Completed syslog sync cycle"

@@ -86,6 +86,9 @@ fi
 # Winstar / Okaya display on Omnisite Brain
 setenv overlays _ov_board_okaya-mipi-dsi_ccmp15-dvk.dtbo,${overlays}
 
+echo "U-Boot: DISP_EN (GPIOH3) HIGH"
+gpio set GPIOH3
+
 if test "${boot_device}" = "mmc"; then
 	dboot linux mmc
 else
