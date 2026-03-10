@@ -63,6 +63,7 @@ create_sw_versions_file() {
 	rm -f $swversionsfile
 	touch $swversionsfile
 	echo 'firmware ${DEY_FIRMWARE_VERSION}' >> $swversionsfile
+	echo 'bsp ${DEY_BSP_VERSION}' >> $swversionsfile
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " create_sw_versions_file;"
 
