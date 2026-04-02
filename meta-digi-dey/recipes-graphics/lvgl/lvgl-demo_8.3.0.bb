@@ -33,7 +33,8 @@ DEPENDS += "\
     gstreamer1.0-plugins-bad \
     gstreamer1.0-plugins-ugly \
     gstreamer1.0-libav \
-    gstreamer1.0-rtsp-server "
+    gstreamer1.0-rtsp-server \
+    networkmanager "
 
 # Backend configuration variables.
 MINIMAL_BACKEND ?= "fbdev"
@@ -135,6 +136,7 @@ FILES:${PN}-init = " \
     /home/root/cert/ \
     /home/root/wings_app \
 "
+RDEPENDS:${PN}-init += "libmodbus"
 
 INITSCRIPT_PACKAGES += "${PN}-init"
 INITSCRIPT_NAME:${PN}-init = "lvgl-demo-init"
