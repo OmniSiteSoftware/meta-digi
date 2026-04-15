@@ -99,7 +99,7 @@ start() {
         echo "Directory $UPDATE_DIR already exists."
     fi
 
-    systemctl stop cccs-gs-demo
+    #systemctl stop cccs-gs-demo
 
 	# Disable the cursor when displaying at full screen on fbdev
     echo "0" > /sys/class/graphics/fbcon/cursor_blink
@@ -111,6 +111,13 @@ start() {
         echo "[OK] Successfully updated route metric for eth0 to 1000."
     else
         echo "[ERROR] Failed to update route metric for eth0." >&2
+    fi
+
+    # Modify the IPv4 route metric for eth1
+    if nmcli connection modify "eth1" ipv4.route-metric 1100; then
+        echo "[OK] Successfully updated route metric for eth1 to 1100."
+    else
+        echo "[ERROR] Failed to update route metric for eth1." >&2
     fi
 
     LOG_FILE="/var/log/application_log"
