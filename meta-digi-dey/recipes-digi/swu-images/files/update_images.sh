@@ -24,6 +24,8 @@ HOME_ROOT_DIR="/home/root"
 PERSISTENT_DATA_DIR="/mnt/data"
 BACKUP_DIR="${PERSISTENT_DATA_DIR}/swupdate-home-root-backup"
 PRESERVED_ITEMS="cert config.json plc_settings.json stats.json"
+NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
+NM_BACKUP_DIR="${BACKUP_DIR}/NetworkManager/system-connections"
 TARGET_ROOTFS_MOUNT="/mnt/swupdate-target-rootfs"
 TARGET_UBI_ROOTFS_VOLUMES="rootfs rootfs_a rootfs_b"
 
@@ -43,10 +45,27 @@ backup_home_root_files() {
 			echo "Skipping ${src}; file or directory not found"
 		fi
 	done
+
+	backup_networkmanager_connections
+}
+
+backup_networkmanager_connections() {
+	echo "Backing up NetworkManager connections from ${NM_CONNECTIONS_DIR} to ${NM_BACKUP_DIR}"
+
+	if [ ! -d "${NM_CONNECTIONS_DIR}" ]; then
+		echo "Skipping ${NM_CONNECTIONS_DIR}; directory not found"
+		return
+	fi
+
+	rm -rf "${NM_BACKUP_DIR}"
+	mkdir -p "$(dirname "${NM_BACKUP_DIR}")"
+	cp -a "${NM_CONNECTIONS_DIR}" "${NM_BACKUP_DIR}"
+	echo "Backed up NetworkManager connections to ${NM_BACKUP_DIR}"
 }
 
 restore_home_root_files() {
 	restore_home_root_files_to "${HOME_ROOT_DIR}"
+	restore_networkmanager_connections_to_root "/"
 	restore_home_root_files_to_ubi_rootfs
 }
 
@@ -68,6 +87,29 @@ restore_home_root_files_to() {
 			echo "Skipping ${src}; backup not found"
 		fi
 	done
+}
+
+restore_networkmanager_connections_to_root() {
+	root_dir="${1}"
+	src="${NM_BACKUP_DIR}"
+
+	if [ "${root_dir}" = "/" ]; then
+		dst="${NM_CONNECTIONS_DIR}"
+	else
+		dst="${root_dir}${NM_CONNECTIONS_DIR}"
+	fi
+
+	echo "Restoring NetworkManager connections from ${src} to ${dst}"
+
+	if [ ! -d "${src}" ]; then
+		echo "Skipping ${src}; backup not found"
+		return
+	fi
+
+	rm -rf "${dst}"
+	mkdir -p "$(dirname "${dst}")"
+	cp -a "${src}" "${dst}"
+	echo "Restored NetworkManager connections to ${dst}"
 }
 
 get_mtd_number() {
@@ -129,6 +171,7 @@ restore_home_root_files_to_ubi_rootfs() {
 		mkdir -p "${TARGET_ROOTFS_MOUNT}"
 		if mount -t ubifs "${mount_source}" "${TARGET_ROOTFS_MOUNT}"; then
 			restore_home_root_files_to "${TARGET_ROOTFS_MOUNT}/home/root"
+			restore_networkmanager_connections_to_root "${TARGET_ROOTFS_MOUNT}"
 			sync
 			umount "${TARGET_ROOTFS_MOUNT}"
 			echo "Restored persistent files into ${mount_source}"
