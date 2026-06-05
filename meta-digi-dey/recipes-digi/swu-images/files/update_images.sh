@@ -20,22 +20,28 @@ if [ $# -lt 1 ]; then
 	exit 1;
 fi
 
-HOME_ROOT_DIR="/home/root"
+WINGS_CONFIG_DIR="/etc/wings"
+LEGACY_HOME_ROOT_DIR="/home/root"
 PERSISTENT_DATA_DIR="/mnt/data"
-BACKUP_DIR="${PERSISTENT_DATA_DIR}/swupdate-home-root-backup"
+BACKUP_DIR="${PERSISTENT_DATA_DIR}/swupdate-wings-config-backup"
 PRESERVED_ITEMS="cert config.json plc_settings.json stats.json"
 NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
 NM_BACKUP_DIR="${BACKUP_DIR}/NetworkManager/system-connections"
 TARGET_ROOTFS_MOUNT="/mnt/swupdate-target-rootfs"
 TARGET_UBI_ROOTFS_VOLUMES="rootfs rootfs_a rootfs_b"
 
-backup_home_root_files() {
-	echo "Backing up persistent /home/root files to ${BACKUP_DIR}"
+backup_wings_config_files() {
+	echo "Backing up persistent Wings configuration to ${BACKUP_DIR}"
 	mkdir -p "${BACKUP_DIR}"
 
 	for item in ${PRESERVED_ITEMS}; do
-		src="${HOME_ROOT_DIR}/${item}"
+		src="${WINGS_CONFIG_DIR}/${item}"
+		legacy_src="${LEGACY_HOME_ROOT_DIR}/${item}"
 		dst="${BACKUP_DIR}/${item}"
+
+		if [ ! -e "${src}" ] && [ -e "${legacy_src}" ]; then
+			src="${legacy_src}"
+		fi
 
 		if [ -e "${src}" ]; then
 			rm -rf "${dst}"
@@ -63,16 +69,16 @@ backup_networkmanager_connections() {
 	echo "Backed up NetworkManager connections to ${NM_BACKUP_DIR}"
 }
 
-restore_home_root_files() {
-	restore_home_root_files_to "${HOME_ROOT_DIR}"
+restore_wings_config_files() {
+	restore_wings_config_files_to "${WINGS_CONFIG_DIR}"
 	restore_networkmanager_connections_to_root "/"
-	restore_home_root_files_to_ubi_rootfs
+	restore_wings_config_files_to_ubi_rootfs
 }
 
-restore_home_root_files_to() {
+restore_wings_config_files_to() {
 	restore_dir="${1}"
 
-	echo "Restoring persistent /home/root files from ${BACKUP_DIR} to ${restore_dir}"
+	echo "Restoring persistent Wings configuration from ${BACKUP_DIR} to ${restore_dir}"
 	mkdir -p "${restore_dir}"
 
 	for item in ${PRESERVED_ITEMS}; do
@@ -148,7 +154,7 @@ is_mount_source_mounted() {
 	grep -q "[[:space:]]${mount_source}[[:space:]]" /proc/mounts || grep -q "^${mount_source}[[:space:]]" /proc/mounts
 }
 
-restore_home_root_files_to_ubi_rootfs() {
+restore_wings_config_files_to_ubi_rootfs() {
 	if ! command -v ubinfo >/dev/null 2>&1; then
 		echo "Skipping UBI rootfs restore; ubinfo not available"
 		return
@@ -170,7 +176,7 @@ restore_home_root_files_to_ubi_rootfs() {
 		echo "Mounting ${mount_source} at ${TARGET_ROOTFS_MOUNT} to restore persistent files"
 		mkdir -p "${TARGET_ROOTFS_MOUNT}"
 		if mount -t ubifs "${mount_source}" "${TARGET_ROOTFS_MOUNT}"; then
-			restore_home_root_files_to "${TARGET_ROOTFS_MOUNT}/home/root"
+			restore_wings_config_files_to "${TARGET_ROOTFS_MOUNT}${WINGS_CONFIG_DIR}"
 			restore_networkmanager_connections_to_root "${TARGET_ROOTFS_MOUNT}"
 			sync
 			umount "${TARGET_ROOTFS_MOUNT}"
@@ -183,7 +189,7 @@ restore_home_root_files_to_ubi_rootfs() {
 
 # Called just before installation process starts.
 if [ "${1}" = "preinst" ]; then
-	backup_home_root_files
+	backup_wings_config_files
 
 	# TODO: Execute custom code here. For example:
 	# - Mount additional devices/partitions.
@@ -192,7 +198,7 @@ fi
 
 # Called just after installation process ends.
 if [ "${1}" = "postinst" ]; then
-	restore_home_root_files
+	restore_wings_config_files
 
 	# TODO: Execute custom code here. For example:
 	# - Clean files/directories.

@@ -6,13 +6,11 @@ LIC_FILES_CHKSUM = "file://Licenses/README;md5=5a7450c57ffe5ae63fd732446b988025"
 DEPENDS += "flex-native bison-native"
 DEPENDS += "python3-setuptools-native"
 
-SRCBRANCH = "v2021.10/maint"
+SRCBRANCH = "read_only_uboot"
 #SRCREV = "${AUTOREV}"
 
-#SRCBRANCH = "read_only_uboot"
-#SRCREV = "${AUTOREV}"
-
-SRC_URI += " \
+SRC_URI = " \
+    ${UBOOT_URI_GITHUB};branch=${SRCBRANCH};name=bootloader \
     ${@oe.utils.conditional('TRUSTFENCE_SIGN_FIT_STM', '1', 'file://fit_signature.cfg', '', d)} \
 "
 SRCREV_bootloader =  "${AUTOREV}"

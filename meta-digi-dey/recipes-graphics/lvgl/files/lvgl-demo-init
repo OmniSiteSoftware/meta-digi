@@ -14,12 +14,13 @@
 #===============================================================================
 
 readonly DEMO_NAME="wings_app"
-readonly DEMO_PATH="/home/root/${DEMO_NAME}"
+readonly DEMO_PATH="/usr/bin/${DEMO_NAME}"
 readonly DEMO_TITLE="Wings Application"
 readonly DEMO_DISPLAY="wayland-1"
 readonly DEMO_ENV="DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=${DEMO_DISPLAY}"
 readonly PID_FILE="/run/${DEMO_NAME}.pid"
 readonly UPDATE_DIR="/mnt/update"
+readonly DEMO_CONFIG_DIR="/etc/wings"
 log() {
     if type "systemd-cat" >/dev/null 2>/dev/null; then
         systemd-cat -p "${1}" -t "${DEMO_NAME}" printf "%s" "${2}"
@@ -130,6 +131,7 @@ start() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching ${DEMO_NAME} from ${DEMO_PATH}" >> "${LOG_FILE}"
 
     # Step 2: Start the demo in background, capture its PID
+    cd "${DEMO_CONFIG_DIR}" || { echo "Failed to enter ${DEMO_CONFIG_DIR}" >> "${LOG_FILE}"; return 1; }
     env ${DEMO_ENV} "${DEMO_PATH}" >> "${LOG_FILE}" 2>&1 &
     DEMO_PID=$!
     echo "${DEMO_PID}" > "${PID_FILE}"

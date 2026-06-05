@@ -4,7 +4,7 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=802d3d83ae80ef5f343050bf96cce3a4 \
                     file://lvgl/LICENCE.txt;md5=bf1198c89ae87f043108cea62460b03a"
 
-SRCBRANCH ?= "ishanya-daily-V1"
+SRCBRANCH ?= "ishanya-trustfence"
 
 SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
@@ -41,6 +41,10 @@ MINIMAL_BACKEND ?= "fbdev"
 MINIMAL_BACKEND:imxdrm = "drm"
 MINIMAL_BACKEND:ccmp15 = "sdl"
 PACKAGECONFIG = "${@bb.utils.contains('DISTRO_FEATURES', 'wayland', 'wayland', '${MINIMAL_BACKEND}', d)}"
+PACKAGECONFIG[wayland] = ",,wayland libxkbcommon"
+PACKAGECONFIG[fbdev] = ",,"
+PACKAGECONFIG[drm] = ",,libdrm"
+PACKAGECONFIG[sdl] = ",,"
 
 # Inherit classes for systemd service and init script handling.
 inherit update-rc.d systemd
@@ -101,15 +105,24 @@ LVGL_DEMO_ENV:ccimx6ul ?= ""
 
 do_install:append() {
     # Install the binary built by the Makefile.
-    install -d ${D}/home/root
-    install -m 0755 ${B}/wings_app ${D}/home/root/wings_app
+    install -d ${D}${bindir}
+    install -m 0755 ${B}/wings_app ${D}${bindir}/wings_app
     
+    # Create the writable configuration directory backed by overlayfs-etc.
+    install -d ${D}${sysconfdir}/wings
+    if [ -f ${S}/config.json ]; then
+        install -m 0644 ${S}/config.json ${D}${sysconfdir}/wings/config.json
+    fi
+    if [ -f ${S}/plc_settings.json ]; then
+        install -m 0644 ${S}/plc_settings.json ${D}${sysconfdir}/wings/plc_settings.json
+    fi
+
     # Create the target directory for certificates and copy all files.
-    install -d ${D}/home/root/cert
-    cp -r ${WORKDIR}/cert/* ${D}/home/root/cert/
+    install -d ${D}${sysconfdir}/wings/cert
+    cp -r ${WORKDIR}/cert/* ${D}${sysconfdir}/wings/cert/
     # Set all certificate files to read-only (0444) and directories to 0555.
-    find ${D}/home/root/cert -type f -exec chmod 0444 {} \;
-    find ${D}/home/root/cert -type d -exec chmod 0555 {} \;
+    find ${D}${sysconfdir}/wings/cert -type f -exec chmod 0444 {} \;
+    find ${D}${sysconfdir}/wings/cert -type d -exec chmod 0555 {} \;
 
     # Install systemd service unit if systemd is enabled.
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
@@ -128,13 +141,14 @@ do_install:append() {
     ln -sf ${sysconfdir}/lvgl-demo-init ${D}${sysconfdir}/init.d/lvgl-demo-init
 }
 
-PACKAGES += "${PN}-init"
+PACKAGES =+ "${PN}-init"
+ALLOW_EMPTY:${PN} = "1"
 FILES:${PN}-init = " \
     ${sysconfdir}/lvgl-demo-init \
     ${sysconfdir}/init.d/lvgl-demo-init \
     ${systemd_unitdir}/system/lvgl-demo-init.service \
-    /home/root/cert/ \
-    /home/root/wings_app \
+    ${sysconfdir}/wings/ \
+    ${bindir}/wings_app \
 "
 RDEPENDS:${PN}-init += "libmodbus"
 

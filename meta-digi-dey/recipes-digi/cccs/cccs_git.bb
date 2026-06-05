@@ -79,6 +79,11 @@ do_install() {
 		device_type="$(echo "${device_type}" | cut -c1-255)"
 		sed -i "/device_type = .*/c\device_type = \"${device_type}\"" ${D}${sysconfdir}/cccs.conf
 	fi
+
+	if ${@bb.utils.contains('IMAGE_FEATURES', 'read-only-rootfs', 'true', 'false', d)}; then
+		sed -i "/firmware_download_path = \/mnt\/update/c\firmware_download_path = \/mnt\/data" ${D}${sysconfdir}/cccs.conf
+		sed -i "/on_the_fly = false/c\on_the_fly = true" ${D}${sysconfdir}/cccs.conf
+	fi
 }
 
 do_install:append:ccimx6ul() {
