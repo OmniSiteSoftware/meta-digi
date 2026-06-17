@@ -1,0 +1,21 @@
+[Unit]
+Description=Wings Application
+After=##WESTON_SERVICE##
+Requires=##WESTON_SERVICE##
+
+[Service]
+Type=forking
+PIDFile=/run/wings_app.pid
+
+ExecStart=/usr/bin/wings-launcher start
+ExecStop=/usr/bin/wings-launcher stop
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+TimeoutStartSec=30
+TimeoutStopSec=15
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

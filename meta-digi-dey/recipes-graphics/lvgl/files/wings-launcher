@@ -1,0 +1,188 @@
+#!/bin/sh
+#===============================================================================
+#
+#  !Description: Verify and launch Wings application
+#
+#===============================================================================
+
+readonly DEMO_NAME="wings_app"
+readonly DEMO_PATH="/etc/wings/${DEMO_NAME}"
+readonly DEMO_SIG_PATH="/etc/wings/${DEMO_NAME}.sig"
+readonly DEMO_TITLE="Wings Application"
+readonly DEMO_DISPLAY="##LVGL_DEMO_DISPLAY##"
+readonly DEMO_ENV="##LVGL_DEMO_ENV##"
+readonly PID_FILE="/run/${DEMO_NAME}.pid"
+readonly UPDATE_DIR="/mnt/update"
+readonly DEMO_CONFIG_DIR="/etc/wings"
+readonly TRUSTFENCE_PUBLIC_KEY="/usr/share/wings/trustfence_key.pub"
+
+log() {
+    if type "systemd-cat" >/dev/null 2>/dev/null; then
+        systemd-cat -p "${1}" -t "${DEMO_NAME}" printf "%s" "${2}"
+    fi
+    logger -p "${1}" -t "${DEMO_NAME}" "${2}"
+}
+
+get_demo_pid() {
+    local pid
+
+    pid="$(pgrep -f "${DEMO_PATH}")"
+    [ -n "${pid}" ] && { echo "${pid}"; return 0; }
+
+    return 1
+}
+
+check_is_running() {
+    local pid
+
+    if [ -s "${PID_FILE}" ]; then
+        pid="$(cat "${PID_FILE}")"
+    else
+        pid="$(get_demo_pid)"
+        [ -n "${pid}" ] && echo "${pid}" > "${PID_FILE}"
+    fi
+
+    if [ -n "${pid}" ]; then
+        kill -0 "${pid}" >/dev/null 2>&1 && return 0
+    fi
+
+    rm -f "${PID_FILE}"
+    return 1
+}
+
+wait_for_wayland() {
+    local count=20
+    local wayland_socket="/run/user/0/${DEMO_DISPLAY}"
+
+    while [ ! -S "${wayland_socket}" ]; do
+        sleep 1
+        count=$((count - 1))
+        [ "${count}" = 0 ] && return 1
+    done
+
+    sleep 1
+    return 0
+}
+
+verify_demo() {
+    if [ ! -x "${DEMO_PATH}" ]; then
+        log err "missing or non-executable application: ${DEMO_PATH}"
+        return 1
+    fi
+
+    if [ ! -f "${DEMO_SIG_PATH}" ]; then
+        log err "missing application signature: ${DEMO_SIG_PATH}"
+        return 1
+    fi
+
+    if [ ! -f "${TRUSTFENCE_PUBLIC_KEY}" ]; then
+        log err "missing TrustFence public key: ${TRUSTFENCE_PUBLIC_KEY}"
+        return 1
+    fi
+
+    if ! openssl dgst -sha256 \
+        -verify "${TRUSTFENCE_PUBLIC_KEY}" \
+        -signature "${DEMO_SIG_PATH}" \
+        "${DEMO_PATH}" >/dev/null 2>&1; then
+        log err "signature verification failed for ${DEMO_PATH}"
+        return 1
+    fi
+
+    log info "signature verification passed for ${DEMO_PATH}"
+    return 0
+}
+
+stop() {
+    check_is_running || return 0
+
+    local pid
+    pid="$(cat "${PID_FILE}")"
+    kill -TERM "${pid}" >/dev/null 2>&1
+
+    local stop_timeout=5
+    local i
+    for i in $(seq "${stop_timeout}"); do
+        check_is_running || { log info "stopped"; return 0; }
+        if [ "${i}" -eq "${stop_timeout}" ]; then
+            log warning "stop: ${DEMO_NAME} did not stop gracefully"
+            kill -KILL "${pid}" >/dev/null 2>&1
+        fi
+        sleep 1
+    done
+}
+
+start() {
+    local log_file="/var/log/application_log"
+    local demo_pid
+
+    check_is_running && { log warning "start: ${DEMO_NAME} already running"; return 0; }
+
+    wait_for_wayland || {
+        log err "Wayland display ${DEMO_DISPLAY} is not available"
+        return 1
+    }
+
+    if [ ! -d "${UPDATE_DIR}" ]; then
+        mkdir -p "${UPDATE_DIR}" || {
+            log err "failed to create ${UPDATE_DIR}"
+            return 1
+        }
+    fi
+
+    echo "0" > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
+
+    nmcli connection modify "eth0" ipv4.route-metric 1000 >/dev/null 2>&1 || \
+        log warning "failed to update route metric for eth0"
+    nmcli connection modify "eth1" ipv4.route-metric 1100 >/dev/null 2>&1 || \
+        log warning "failed to update route metric for eth1"
+
+    verify_demo || return 1
+
+    : > "${log_file}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Launching ${DEMO_NAME} from ${DEMO_PATH}" >> "${log_file}"
+
+    cd "${DEMO_CONFIG_DIR}" || {
+        log err "failed to enter ${DEMO_CONFIG_DIR}"
+        return 1
+    }
+
+    env ${DEMO_ENV} "${DEMO_PATH}" >> "${log_file}" 2>&1 &
+    demo_pid=$!
+    echo "${demo_pid}" > "${PID_FILE}"
+
+    if kill -0 "${demo_pid}" >/dev/null 2>&1; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] ${DEMO_NAME} started with PID ${demo_pid}" >> "${log_file}"
+        return 0
+    fi
+
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Failed to start ${DEMO_NAME}" >> "${log_file}"
+    return 1
+}
+
+case "$1" in
+    start)
+        echo -n "Starting ${DEMO_TITLE}: "
+        start
+        status=$?
+        [ "${status}" -eq 0 ] && echo "done." || echo "FAIL"
+        exit "${status}"
+        ;;
+    stop)
+        echo -n "Stopping ${DEMO_TITLE}: "
+        stop
+        if check_is_running; then
+            echo "FAIL"
+            exit 1
+        fi
+        echo "OK"
+        ;;
+    restart)
+        stop
+        sleep 1
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac

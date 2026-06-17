@@ -27,7 +27,7 @@ BACKUP_DIR="${PERSISTENT_DATA_DIR}/swupdate-wings-config-backup"
 PRESERVED_ITEMS="cert config.json plc_settings.json stats.json"
 NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
 NM_BACKUP_DIR="${BACKUP_DIR}/NetworkManager/system-connections"
-TARGET_ROOTFS_MOUNT="/mnt/swupdate-target-rootfs"
+TARGET_ROOTFS_MOUNT="${PERSISTENT_DATA_DIR}/swupdate-target-rootfs"
 TARGET_UBI_ROOTFS_VOLUMES="rootfs rootfs_a rootfs_b"
 
 backup_wings_config_files() {
@@ -154,9 +154,18 @@ is_mount_source_mounted() {
 	grep -q "[[:space:]]${mount_source}[[:space:]]" /proc/mounts || grep -q "^${mount_source}[[:space:]]" /proc/mounts
 }
 
+is_active_rootfs_squashfs() {
+	awk '$2 == "/" && $3 == "squashfs" { found = 1 } END { exit !found }' /proc/mounts
+}
+
 restore_wings_config_files_to_ubi_rootfs() {
 	if ! command -v ubinfo >/dev/null 2>&1; then
 		echo "Skipping UBI rootfs restore; ubinfo not available"
+		return
+	fi
+
+	if is_active_rootfs_squashfs; then
+		echo "Skipping UBI rootfs restore; read-only SquashFS rootfs cannot be modified"
 		return
 	fi
 

@@ -8,8 +8,8 @@ SRCBRANCH ?= "ishanya-trustfence"
 
 SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
-    file://lvgl-demo-init \
-    file://lvgl-demo-init.service \
+    file://wings.service \
+    file://wings-launcher \
     file://cert \
 "
 
@@ -20,7 +20,7 @@ PV = "1.0+git${SRCPV}"
 # Use the Makefile build system.
 EXTRA_OEMAKE = "DESTDIR=${D}"
 
-inherit pkgconfig update-rc.d systemd
+inherit pkgconfig systemd
 
 DEPENDS += "\
     ffmpeg curl openssl json-c wayland libxkbcommon \
@@ -35,6 +35,7 @@ DEPENDS += "\
     gstreamer1.0-libav \
     gstreamer1.0-rtsp-server \
     networkmanager "
+DEPENDS += "${@oe.utils.conditional('TRUSTFENCE_SIGN', '1', 'openssl-native trustfence-sign-tools-native', '', d)}"
 
 # Backend configuration variables.
 MINIMAL_BACKEND ?= "fbdev"
@@ -45,9 +46,6 @@ PACKAGECONFIG[wayland] = ",,wayland libxkbcommon"
 PACKAGECONFIG[fbdev] = ",,"
 PACKAGECONFIG[drm] = ",,libdrm"
 PACKAGECONFIG[sdl] = ",,"
-
-# Inherit classes for systemd service and init script handling.
-inherit update-rc.d systemd
 
 # Set the source directory to the git checkout.
 S = "${WORKDIR}/git"
@@ -104,12 +102,49 @@ LVGL_DEMO_ENV ?= "DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=\$\{D
 LVGL_DEMO_ENV:ccimx6ul ?= ""
 
 do_install:append() {
-    # Install the binary built by the Makefile.
-    install -d ${D}${bindir}
-    install -m 0755 ${B}/wings_app ${D}${bindir}/wings_app
-    
     # Create the writable configuration directory backed by overlayfs-etc.
     install -d ${D}${sysconfdir}/wings
+
+    # Install the binary where file-based SWU can update it on read-only rootfs.
+    install -m 0755 ${B}/wings_app ${D}${sysconfdir}/wings/wings_app
+
+    if [ "${TRUSTFENCE_SIGN}" = "1" ]; then
+        TRUSTFENCE_KEYS_DIR="${TRUSTFENCE_SIGN_KEYS_PATH}"
+        if [ "${TRUSTFENCE_KEYS_DIR}" = "default" ]; then
+            TRUSTFENCE_KEYS_DIR="${TOPDIR}/trustfence"
+        fi
+
+        export CONFIG_SIGN_KEYS_PATH="${TRUSTFENCE_KEYS_DIR}"
+        trustfence-gen-pki.sh -p "${DIGI_SOM}"
+
+        if [ "${DIGI_SOM}" = "ccmp15" ]; then
+            TRUSTFENCE_PRIVATE_KEY="${TRUSTFENCE_KEYS_DIR}/keys/privateKey.pem"
+            TRUSTFENCE_PUBLIC_KEY="${TRUSTFENCE_KEYS_DIR}/keys/publicKey.pem"
+            TRUSTFENCE_PASSWORD_FILE="${TRUSTFENCE_KEYS_DIR}/keys/key_pass.txt"
+        elif [ "${DIGI_SOM}" = "ccmp13" ]; then
+            TRUSTFENCE_PRIVATE_KEY="${TRUSTFENCE_KEYS_DIR}/keys/privateKey0${TRUSTFENCE_KEY_INDEX}.pem"
+            TRUSTFENCE_PUBLIC_KEY="${TRUSTFENCE_KEYS_DIR}/keys/publicKey0${TRUSTFENCE_KEY_INDEX}.pem"
+            TRUSTFENCE_PASSWORD_FILE="${TRUSTFENCE_KEYS_DIR}/keys/key_pass0${TRUSTFENCE_KEY_INDEX}.txt"
+        else
+            die "Unsupported DIGI_SOM for WingsApp signing: ${DIGI_SOM}"
+        fi
+
+        [ -f "${TRUSTFENCE_PRIVATE_KEY}" ] || die "Missing TrustFence private key: ${TRUSTFENCE_PRIVATE_KEY}"
+        [ -f "${TRUSTFENCE_PUBLIC_KEY}" ] || die "Missing TrustFence public key: ${TRUSTFENCE_PUBLIC_KEY}"
+        [ -f "${TRUSTFENCE_PASSWORD_FILE}" ] || die "Missing TrustFence password file: ${TRUSTFENCE_PASSWORD_FILE}"
+
+        openssl dgst -sha256 \
+            -sign "${TRUSTFENCE_PRIVATE_KEY}" \
+            -passin file:"${TRUSTFENCE_PASSWORD_FILE}" \
+            -out "${D}${sysconfdir}/wings/wings_app.sig" \
+            "${D}${sysconfdir}/wings/wings_app"
+
+        [ -s "${D}${sysconfdir}/wings/wings_app.sig" ] || die "Failed to generate WingsApp signature"
+
+        install -d ${D}${datadir}/wings
+        install -m 0644 "${TRUSTFENCE_PUBLIC_KEY}" ${D}${datadir}/wings/trustfence_key.pub
+    fi
+
     if [ -f ${S}/config.json ]; then
         install -m 0644 ${S}/config.json ${D}${sysconfdir}/wings/config.json
     fi
@@ -127,36 +162,27 @@ do_install:append() {
     # Install systemd service unit if systemd is enabled.
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
         install -d ${D}${systemd_unitdir}/system
-        install -m 0644 ${WORKDIR}/lvgl-demo-init.service ${D}${systemd_unitdir}/system/
+        install -m 0644 ${WORKDIR}/wings.service ${D}${systemd_unitdir}/system/
         sed -i -e "s,##WESTON_SERVICE##,${WESTON_SERVICE},g" \
-               "${D}${systemd_unitdir}/system/lvgl-demo-init.service"
+               "${D}${systemd_unitdir}/system/wings.service"
     fi
 
-    # Install the init script that launches the LVGL demo on boot.
-    install -d ${D}${sysconfdir}/init.d
-    install -m 0755 ${WORKDIR}/lvgl-demo-init ${D}${sysconfdir}/lvgl-demo-init
+    # Install the trusted launcher into read-only rootfs.
+    install -d ${D}${bindir}
+    install -m 0755 ${WORKDIR}/wings-launcher ${D}${bindir}/wings-launcher
     sed -i -e "s@##LVGL_DEMO_DISPLAY##@${LVGL_DEMO_DISPLAY}@g" \
            -e "s@##LVGL_DEMO_ENV##@${LVGL_DEMO_ENV}@g" \
-           "${D}${sysconfdir}/lvgl-demo-init"
-    ln -sf ${sysconfdir}/lvgl-demo-init ${D}${sysconfdir}/init.d/lvgl-demo-init
+           "${D}${bindir}/wings-launcher"
 }
 
-PACKAGES =+ "${PN}-init"
-ALLOW_EMPTY:${PN} = "1"
-FILES:${PN}-init = " \
-    ${sysconfdir}/lvgl-demo-init \
-    ${sysconfdir}/init.d/lvgl-demo-init \
-    ${systemd_unitdir}/system/lvgl-demo-init.service \
+FILES:${PN} += " \
+    ${bindir}/wings-launcher \
+    ${systemd_unitdir}/system/wings.service \
     ${sysconfdir}/wings/ \
-    ${bindir}/wings_app \
+    ${datadir}/wings/ \
 "
-RDEPENDS:${PN}-init += "libmodbus"
+RDEPENDS:${PN} += "libmodbus openssl"
 
-INITSCRIPT_PACKAGES += "${PN}-init"
-INITSCRIPT_NAME:${PN}-init = "lvgl-demo-init"
-INITSCRIPT_PARAMS:${PN}-init = "start 99 3 5 . stop 20 0 1 2 6 ."
-
-SYSTEMD_PACKAGES = "${PN}-init"
-SYSTEMD_SERVICE:${PN}-init = "lvgl-demo-init.service"
+SYSTEMD_SERVICE:${PN} = "wings.service"
 
 COMPATIBLE_MACHINE = "(ccimx6$|ccimx6ul|ccimx8m|ccimx8x|ccimx93|ccmp15|ccmp2)"
