@@ -6,6 +6,7 @@ Requires=##WESTON_SERVICE##
 [Service]
 Type=forking
 PIDFile=/run/wings_app.pid
+EnvironmentFile=-/etc/wings/wings.env
 
 ExecStart=/usr/bin/wings-launcher start
 ExecStop=/usr/bin/wings-launcher stop

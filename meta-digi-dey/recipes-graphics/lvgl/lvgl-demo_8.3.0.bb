@@ -100,10 +100,14 @@ LVGL_DEMO_DISPLAY:ccmp2 ?= "wayland-1"
 LVGL_DEMO_DISPLAY:ccimx93 ?= "wayland-1"
 LVGL_DEMO_ENV ?= "DISPLAY=:0.0 XDG_RUNTIME_DIR=/run/user/0 WAYLAND_DISPLAY=\$\{DEMO_DISPLAY\}"
 LVGL_DEMO_ENV:ccimx6ul ?= ""
+WINGS_AWS_IOT_ENDPOINT ?= "a1sfjfagbw2oyq-ats.iot.us-east-2.amazonaws.com"
 
 do_install:append() {
     # Create the writable configuration directory backed by overlayfs-etc.
     install -d ${D}${sysconfdir}/wings
+
+    printf 'WINGS_AWS_IOT_ENDPOINT=%s\n' "${WINGS_AWS_IOT_ENDPOINT}" > ${D}${sysconfdir}/wings/wings.env
+    chmod 0644 ${D}${sysconfdir}/wings/wings.env
 
     # Install the binary where file-based SWU can update it on read-only rootfs.
     install -m 0755 ${B}/wings_app ${D}${sysconfdir}/wings/wings_app
