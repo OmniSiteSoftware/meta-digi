@@ -27,6 +27,12 @@ inherit swupdate dey-swupdate-common
 # Avoid all 'SRC_URI' files to be included in the SWU image. Include only 'SWUPDATE_IMAGES' files and 'sw-description' (added by default).
 INHIBIT_SWUPDATE_ADD_SRC_URI = "true"
 
+# Rootfs-owned /etc files that must be refreshed from the new image when
+# overlayfs-etc is enabled. Paths are relative to /etc.
+SWUPDATE_OVERLAYFS_ETC_REFRESH_LIST ?= ""
+SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT ?= "${OVERLAYFS_ETC_MOUNT_POINT}"
+do_swuimage[vardeps] += "SWUPDATE_OVERLAYFS_ETC_REFRESH_LIST SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT"
+
 # Files to include in the SWU update package.
 SWUPDATE_IMAGES = " \
     ${@oe.utils.ifelse(d.getVar('SWUPDATE_IS_IMAGES_UPDATE') == 'true', '${IMG_NAME}', '')} \
@@ -67,7 +73,18 @@ python do_swuimage:prepend() {
         workdir = d.getVar('WORKDIR', True)
         updatescript = os.path.join(workdir, updatescript)
     if os.path.isfile(updatescript):
-        shutil.copyfile(updatescript, os.path.join(imgdeploydir, os.path.basename(updatescript)))
+        update_script_deploy = os.path.join(imgdeploydir, os.path.basename(updatescript))
+        shutil.copyfile(updatescript, update_script_deploy)
+        with open(update_script_deploy, "r") as f:
+            update_script_data = f.read()
+        update_script_data = update_script_data.replace(
+            "@@SWUPDATE_OVERLAYFS_ETC_REFRESH_LIST@@",
+            d.getVar('SWUPDATE_OVERLAYFS_ETC_REFRESH_LIST') or "")
+        update_script_data = update_script_data.replace(
+            "@@SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT@@",
+            d.getVar('SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT') or "/mnt/data")
+        with open(update_script_deploy, "w") as f:
+            f.write(update_script_data)
 
     # Copy U-Boot script file.
     if d.getVar('SWUPDATE_UBOOTIMG') == "true":

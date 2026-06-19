@@ -22,9 +22,11 @@ fi
 
 WINGS_CONFIG_DIR="/etc/wings"
 LEGACY_HOME_ROOT_DIR="/home/root"
-PERSISTENT_DATA_DIR="/mnt/data"
+PERSISTENT_DATA_DIR="@@SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT@@"
 BACKUP_DIR="${PERSISTENT_DATA_DIR}/swupdate-wings-config-backup"
 PRESERVED_ITEMS="cert config.json plc_settings.json stats.json"
+OVERLAY_ETC_UPPER_DIR="${PERSISTENT_DATA_DIR}/overlay-etc/upper"
+REFRESHED_ETC_ITEMS="@@SWUPDATE_OVERLAYFS_ETC_REFRESH_LIST@@"
 NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
 NM_BACKUP_DIR="${BACKUP_DIR}/NetworkManager/system-connections"
 TARGET_ROOTFS_MOUNT="${PERSISTENT_DATA_DIR}/swupdate-target-rootfs"
@@ -118,6 +120,36 @@ restore_networkmanager_connections_to_root() {
 	echo "Restored NetworkManager connections to ${dst}"
 }
 
+remove_overlayfs_etc_entry() {
+	item="${1}"
+	entry="${OVERLAY_ETC_UPPER_DIR}/${item}"
+	parent_dir="$(dirname "${entry}")"
+	base_name="$(basename "${entry}")"
+	whiteout="${parent_dir}/.wh.${base_name}"
+
+	if [ -e "${entry}" ] || [ -L "${entry}" ]; then
+		rm -rf "${entry}"
+		echo "Removed stale /etc overlay entry ${entry}"
+	fi
+
+	if [ -e "${whiteout}" ] || [ -L "${whiteout}" ]; then
+		rm -rf "${whiteout}"
+		echo "Removed stale /etc overlay whiteout ${whiteout}"
+	fi
+}
+
+clear_refreshed_files_from_overlayfs_etc() {
+	if [ ! -d "${OVERLAY_ETC_UPPER_DIR}" ]; then
+		echo "Skipping /etc overlay cleanup; ${OVERLAY_ETC_UPPER_DIR} not found"
+		return
+	fi
+
+	echo "Clearing rootfs-owned /etc files from overlay so updated image versions are used"
+	for item in ${REFRESHED_ETC_ITEMS}; do
+		remove_overlayfs_etc_entry "${item}"
+	done
+}
+
 get_mtd_number() {
 	mtd_line="$(sed -ne "/${1}/s,^mtd\([0-9]\+\).*,\1,g;T;p" /proc/mtd)"
 	echo "${mtd_line:--1}"
@@ -208,6 +240,7 @@ fi
 # Called just after installation process ends.
 if [ "${1}" = "postinst" ]; then
 	restore_wings_config_files
+	clear_refreshed_files_from_overlayfs_etc
 
 	# TODO: Execute custom code here. For example:
 	# - Clean files/directories.
