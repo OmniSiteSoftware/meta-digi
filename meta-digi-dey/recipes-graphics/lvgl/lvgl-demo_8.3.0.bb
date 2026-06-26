@@ -10,6 +10,7 @@ SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
     file://wings.service \
     file://wings-launcher \
+    file://99-eth1-100mbps \
     file://cert \
 "
 
@@ -177,6 +178,11 @@ do_install:append() {
     sed -i -e "s@##LVGL_DEMO_DISPLAY##@${LVGL_DEMO_DISPLAY}@g" \
            -e "s@##LVGL_DEMO_ENV##@${LVGL_DEMO_ENV}@g" \
            "${D}${bindir}/wings-launcher"
+
+    # Install NetworkManager dispatcher to advertise only 10/100 Mbps on eth1.
+    install -d ${D}${sysconfdir}/NetworkManager/dispatcher.d
+    install -m 0755 ${WORKDIR}/99-eth1-100mbps \
+        ${D}${sysconfdir}/NetworkManager/dispatcher.d/99-eth1-100mbps
 }
 
 FILES:${PN} += " \
@@ -184,8 +190,9 @@ FILES:${PN} += " \
     ${systemd_unitdir}/system/wings.service \
     ${sysconfdir}/wings/ \
     ${datadir}/wings/ \
+    ${sysconfdir}/NetworkManager/dispatcher.d/99-eth1-100mbps \
 "
-RDEPENDS:${PN} += "libmodbus openssl"
+RDEPENDS:${PN} += "ethtool libmodbus openssl"
 
 SYSTEMD_SERVICE:${PN} = "wings.service"
 
