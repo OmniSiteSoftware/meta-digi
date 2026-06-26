@@ -1,0 +1,8 @@
+#!/bin/sh
+
+IFACE="$1"
+STATUS="$2"
+
+if [ "$IFACE" = "eth1" ] && [ "$STATUS" = "up" ]; then
+    /usr/sbin/ethtool -s eth1 advertise 0x00f autoneg on
+fi

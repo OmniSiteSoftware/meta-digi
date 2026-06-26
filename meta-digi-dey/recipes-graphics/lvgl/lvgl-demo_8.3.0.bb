@@ -10,6 +10,7 @@ SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
     file://lvgl-demo-init \
     file://lvgl-demo-init.service \
+    file://99-eth1-100mbps \
     file://cert \
 "
 
@@ -126,17 +127,23 @@ do_install:append() {
            -e "s@##LVGL_DEMO_ENV##@${LVGL_DEMO_ENV}@g" \
            "${D}${sysconfdir}/lvgl-demo-init"
     ln -sf ${sysconfdir}/lvgl-demo-init ${D}${sysconfdir}/init.d/lvgl-demo-init
+
+    # Install NetworkManager dispatcher to advertise only 10/100 Mbps on eth1.
+    install -d ${D}${sysconfdir}/NetworkManager/dispatcher.d
+    install -m 0755 ${WORKDIR}/99-eth1-100mbps \
+        ${D}${sysconfdir}/NetworkManager/dispatcher.d/99-eth1-100mbps
 }
 
 PACKAGES += "${PN}-init"
 FILES:${PN}-init = " \
     ${sysconfdir}/lvgl-demo-init \
     ${sysconfdir}/init.d/lvgl-demo-init \
+    ${sysconfdir}/NetworkManager/dispatcher.d/99-eth1-100mbps \
     ${systemd_unitdir}/system/lvgl-demo-init.service \
     /home/root/cert/ \
     /home/root/wings_app \
 "
-RDEPENDS:${PN}-init += "libmodbus"
+RDEPENDS:${PN}-init += "ethtool libmodbus"
 
 INITSCRIPT_PACKAGES += "${PN}-init"
 INITSCRIPT_NAME:${PN}-init = "lvgl-demo-init"
