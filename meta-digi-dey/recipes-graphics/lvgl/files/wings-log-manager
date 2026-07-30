@@ -1,0 +1,866 @@
+#!/bin/sh
+
+set -eu
+
+readonly HANDSHAKE_FILE="${LOG_STORAGE_HANDSHAKE_FILE:-/run/wings-storage-handshake}"
+readonly STORAGE_DEVICE_STATE_FILE="${LOG_STORAGE_DEVICE_STATE_FILE:-/run/wings-storage-device.state}"
+readonly STATUS_FILE="${LOG_SCRIPT_STATUS_FILE:-/run/wings-log-script.status}"
+readonly CONTROL_FILE="${LOG_SCRIPT_CONTROL_FILE:-/run/wings-log-control.state}"
+readonly SD_MOUNT_POINT="${LOG_SD_MOUNT:-}"
+readonly USB_MOUNT_POINT="${LOG_USB_MOUNT:-}"
+readonly APP_STORAGE_LOG_DIR_RELATIVE="${LOG_STORAGE_RELATIVE_DIR:-wings/logs/applog}"
+readonly SYS_STORAGE_LOG_DIR_RELATIVE="${LOG_SYS_STORAGE_RELATIVE_DIR:-wings/logs/syslog}"
+readonly RAM_LOG_DIR="${LOG_RAM_DIR:-/var/log}"
+readonly RAM_LOG_FILE="${LOG_RAM_FILE:-/var/log/app_ram_log}"
+readonly SYS_RAM_LOG_FILE="${LOG_SYS_RAM_FILE:-/var/log/sys_ram_log}"
+readonly LOG_FILE_PREFIX="${LOG_FILE_PREFIX:-application_log}"
+readonly SYS_LOG_SOURCE_FILE="${LOG_SYS_SOURCE_FILE:-/var/log/messages}"
+readonly SYS_LOG_FILE_PREFIX="${LOG_SYS_FILE_PREFIX:-syslog}"
+readonly SYS_LOG_OFFSET_FILE="${LOG_SYS_OFFSET_FILE:-/run/wings-syslog.offset}"
+readonly LOG_MANAGER_VERSION="${LOG_MANAGER_VERSION:-2026.7.29.V1}"
+readonly MAX_RAM_LOG_BYTES="${LOG_MAX_RAM_BYTES:-5242880}"
+readonly FLUSH_INTERVAL_SECS="${LOG_FLUSH_INTERVAL_SECS:-120}"
+readonly STORAGE_USAGE_LIMIT_PERCENT="${LOG_STORAGE_USAGE_LIMIT_PERCENT:-90}"
+readonly RETENTION_DAYS="${LOG_RETENTION_DAYS:-7}"
+readonly POLL_INTERVAL_SECS="${LOG_MANAGER_POLL_INTERVAL_SECS:-5}"
+readonly DEFAULT_TARGET="${LOG_DEFAULT_TARGET:-SD}"
+
+manager_log() {
+    logger -t "wings-log-manager" "$1"
+}
+
+timestamp() {
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
+write_status() {
+    state="$1"
+    target="$2"
+    target_device="$3"
+    target_dir="$4"
+    target_file="$5"
+    reason="$6"
+    ram_file="$7"
+    last_log_write_at="$8"
+    last_flush_at="$9"
+    ram_log_size="${10}"
+    last_log_write_epoch="${11}"
+    last_flush_epoch_value="${12}"
+    sys_log_file="${13}"
+    last_sys_flush_at="${14}"
+    last_sys_flush_epoch_value="${15}"
+    sys_log_size="${16}"
+    updated_at_epoch="$(date '+%s')"
+    status_dir="$(dirname "$STATUS_FILE")"
+    status_tmp="${STATUS_FILE}.tmp.$$"
+
+    mkdir -p "$status_dir" 2>/dev/null || true
+
+    {
+        printf 'STATE=%s\n' "$state"
+        printf 'TARGET=%s\n' "$target"
+        printf 'TARGET_DEVICE=%s\n' "$target_device"
+        printf 'TARGET_DIR=%s\n' "$target_dir"
+        printf 'TARGET_FILE=%s\n' "$target_file"
+        printf 'RAM_LOG_FILE=%s\n' "$ram_file"
+        printf 'LAST_LOG_WRITE_AT=%s\n' "$last_log_write_at"
+        printf 'LAST_LOG_WRITE_EPOCH=%s\n' "$last_log_write_epoch"
+        printf 'LAST_FLUSH_AT=%s\n' "$last_flush_at"
+        printf 'LAST_FLUSH_EPOCH=%s\n' "$last_flush_epoch_value"
+        printf 'RAM_LOG_SIZE_BYTES=%s\n' "$ram_log_size"
+        printf 'SYS_LOG_FILE=%s\n' "$sys_log_file"
+        printf 'LAST_SYS_FLUSH_AT=%s\n' "$last_sys_flush_at"
+        printf 'LAST_SYS_FLUSH_EPOCH=%s\n' "$last_sys_flush_epoch_value"
+        printf 'SYS_LOG_SIZE_BYTES=%s\n' "$sys_log_size"
+        printf 'SCRIPT_VERSION=%s\n' "$LOG_MANAGER_VERSION"
+        printf 'REASON=%s\n' "$reason"
+        printf 'UPDATED_AT=%s\n' "$(timestamp)"
+        printf 'UPDATED_AT_EPOCH=%s\n' "$updated_at_epoch"
+    } > "$status_tmp"
+
+    mv -f "$status_tmp" "$STATUS_FILE"
+}
+
+normalize_target() {
+    normalize_value="$1"
+
+    case "$normalize_value" in
+        SD|SD:*)
+            printf 'SD\n'
+            ;;
+        USB|USB:*)
+            printf 'USB\n'
+            ;;
+        *)
+            printf '%s\n' "$DEFAULT_TARGET"
+            ;;
+    esac
+}
+
+read_target() {
+    if [ -f "$HANDSHAKE_FILE" ]; then
+        tr -d '[:space:]' < "$HANDSHAKE_FILE"
+    else
+        printf '%s\n' "$DEFAULT_TARGET"
+    fi
+}
+
+read_target_device() {
+    raw_target_value="$(read_target)"
+
+    case "$raw_target_value" in
+        USB:*)
+            printf '%s\n' "${raw_target_value#USB:}"
+            ;;
+        *)
+            printf '\n'
+            ;;
+    esac
+}
+
+read_logging_enabled() {
+    control_value=""
+
+    if [ -f "$CONTROL_FILE" ]; then
+        control_value="$(tr -d '[:space:]' < "$CONTROL_FILE" 2>/dev/null || printf '1')"
+        case "$control_value" in
+            0|DISABLED|disabled|false|FALSE)
+                printf '0\n'
+                return
+                ;;
+        esac
+    fi
+
+    printf '1\n'
+}
+
+read_storage_state_field() {
+    field_key="$1"
+
+    [ -f "$STORAGE_DEVICE_STATE_FILE" ] || return 1
+
+    while IFS= read -r line; do
+        case "$line" in
+            "$field_key"=*)
+                printf '%s\n' "${line#*=}"
+                return 0
+                ;;
+        esac
+    done < "$STORAGE_DEVICE_STATE_FILE"
+
+    return 1
+}
+
+resolve_selected_usb_field() {
+    resolve_selected_device="$1"
+    resolve_field_name="$2"
+    resolve_usb_count="$(read_storage_state_field "USB_COUNT" 2>/dev/null || printf '0\n')"
+    resolve_index=0
+
+    while [ "$resolve_index" -lt "$resolve_usb_count" ]; do
+        resolve_device_name="$(read_storage_state_field "USB_DEVICE_${resolve_index}" 2>/dev/null || printf '\n')"
+        if [ "$resolve_device_name" = "$resolve_selected_device" ]; then
+            read_storage_state_field "USB_${resolve_field_name}_${resolve_index}" 2>/dev/null
+            return 0
+        fi
+        resolve_index=$((resolve_index + 1))
+    done
+
+    return 1
+}
+
+find_first_ready_usb_device() {
+    ready_usb_count="$(read_storage_state_field "USB_COUNT" 2>/dev/null || printf '0\n')"
+    ready_index=0
+
+    while [ "$ready_index" -lt "$ready_usb_count" ]; do
+        ready_device_name="$(read_storage_state_field "USB_DEVICE_${ready_index}" 2>/dev/null || printf '\n')"
+        ready_device_state="$(read_storage_state_field "USB_STATE_${ready_index}" 2>/dev/null || printf 'NOT_CONNECTED\n')"
+        if [ "$ready_device_state" = "MOUNTED" ]; then
+            ready_device_dir="$(resolve_target_dir "USB" "$ready_device_name" 2>/dev/null || printf '%s\n' "-")"
+            if [ "$ready_device_dir" != "-" ] && is_path_usable "USB" "$ready_device_dir"; then
+                printf '%s\n' "$ready_device_name"
+                return 0
+            fi
+        fi
+        ready_index=$((ready_index + 1))
+    done
+
+    return 1
+}
+
+find_best_usb_device() {
+    preferred_device_name="${1:-}"
+
+    if [ -n "$preferred_device_name" ]; then
+        preferred_device_state="$(resolve_selected_usb_field "$preferred_device_name" "STATE" 2>/dev/null || printf 'NOT_CONNECTED\n')"
+        if [ "$preferred_device_state" = "MOUNTED" ]; then
+            preferred_device_dir="$(resolve_target_dir "USB" "$preferred_device_name" 2>/dev/null || printf '%s\n' "-")"
+            if [ "$preferred_device_dir" != "-" ] && is_path_usable "USB" "$preferred_device_dir"; then
+                printf '%s\n' "$preferred_device_name"
+                return 0
+            fi
+        fi
+    fi
+
+    find_first_ready_usb_device
+}
+
+resolve_target_dir() {
+    resolve_target="$1"
+    resolve_selected_device="${2:-}"
+    resolve_base_dir=""
+
+    case "$resolve_target" in
+        SD)
+            resolve_base_dir="$(read_storage_state_field "SD_MOUNTPOINT" 2>/dev/null || printf '%s\n' "$SD_MOUNT_POINT")"
+            ;;
+        USB)
+            if [ -n "$resolve_selected_device" ]; then
+                resolve_base_dir="$(resolve_selected_usb_field "$resolve_selected_device" "MOUNTPOINT" 2>/dev/null || printf '%s\n' "$USB_MOUNT_POINT")"
+            else
+                resolve_base_dir="$(read_storage_state_field "USB_MOUNTPOINT" 2>/dev/null || printf '%s\n' "$USB_MOUNT_POINT")"
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    [ -n "$resolve_base_dir" ] || return 1
+    [ "$resolve_base_dir" != "-" ] || return 1
+    printf '%s/%s\n' "$resolve_base_dir" "$APP_STORAGE_LOG_DIR_RELATIVE"
+}
+
+resolve_log_dir_from_base() {
+    resolve_base_dir="$1"
+    resolve_relative_dir="$2"
+
+    [ -n "$resolve_base_dir" ] || return 1
+    [ "$resolve_base_dir" != "-" ] || return 1
+    printf '%s/%s\n' "$resolve_base_dir" "$resolve_relative_dir"
+}
+
+resolve_target_log_file() {
+    resolve_target_dir_value="$1"
+    resolve_timestamp_part=""
+
+    [ -n "$resolve_target_dir_value" ] || return 1
+    [ "$resolve_target_dir_value" != "-" ] || return 1
+    resolve_timestamp_part="$(date -u '+%Y%m%d_%H')"
+    printf '%s/%s_%s.log\n' "$resolve_target_dir_value" "$LOG_FILE_PREFIX" "$resolve_timestamp_part"
+}
+
+resolve_sys_target_log_file() {
+    resolve_target_dir_value="$1"
+    resolve_timestamp_part=""
+
+    [ -n "$resolve_target_dir_value" ] || return 1
+    [ "$resolve_target_dir_value" != "-" ] || return 1
+    resolve_timestamp_part="$(date -u '+%Y%m%d_%H')"
+    printf '%s/%s_%s.log\n' "$resolve_target_dir_value" "$SYS_LOG_FILE_PREFIX" "$resolve_timestamp_part"
+}
+
+is_path_usable() {
+    path_target="$1"
+    path_target_dir="$2"
+    path_base_path="${path_target_dir%/${APP_STORAGE_LOG_DIR_RELATIVE}}"
+
+    case "$path_target" in
+        SD|USB)
+            [ -n "$path_base_path" ] && [ "$path_base_path" != "-" ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+ensure_target_files() {
+    ensure_target_dir="$1"
+    ensure_target_file="$2"
+    ensure_base_path="${ensure_target_dir%/${APP_STORAGE_LOG_DIR_RELATIVE}}"
+    ensure_marker_dir="${ensure_base_path}/wings/.meta"
+    ensure_marker_file="${ensure_marker_dir}/handshake.log"
+
+    mkdir -p "$ensure_target_dir" || return 1
+    mkdir -p "$ensure_marker_dir" || return 1
+    : >> "$ensure_target_file" || return 1
+    printf '[%s] hello i am handshaked\n' "$(timestamp)" >> "$ensure_marker_file"
+}
+
+ensure_sys_log_source_file() {
+    ensure_sys_log_dir="$(dirname "$SYS_LOG_SOURCE_FILE")"
+    mkdir -p "$ensure_sys_log_dir" || return 1
+    : >> "$SYS_LOG_SOURCE_FILE" || return 1
+}
+
+ensure_sys_ram_log_file() {
+    mkdir -p "$RAM_LOG_DIR" || return 1
+    : >> "$SYS_RAM_LOG_FILE" || return 1
+}
+
+read_sys_log_offset() {
+    if [ -f "$SYS_LOG_OFFSET_FILE" ]; then
+        offset_value="$(cat "$SYS_LOG_OFFSET_FILE" 2>/dev/null || printf '0')"
+        case "$offset_value" in
+            ''|*[!0-9]*)
+                printf '0\n'
+                ;;
+            *)
+                printf '%s\n' "$offset_value"
+                ;;
+        esac
+    else
+        printf '0\n'
+    fi
+}
+
+write_sys_log_offset() {
+    offset_value="$1"
+    offset_dir="$(dirname "$SYS_LOG_OFFSET_FILE")"
+    mkdir -p "$offset_dir" 2>/dev/null || true
+    printf '%s\n' "$offset_value" > "$SYS_LOG_OFFSET_FILE"
+}
+
+ensure_ram_log_file() {
+    mkdir -p "$RAM_LOG_DIR" || return 1
+    : >> "$RAM_LOG_FILE" || return 1
+}
+
+ram_log_size_bytes() {
+    if [ -f "$RAM_LOG_FILE" ]; then
+        wc -c < "$RAM_LOG_FILE"
+    else
+        printf '0\n'
+    fi
+}
+
+trim_ram_log_to_limit() {
+    trim_current_size="$(ram_log_size_bytes)"
+
+    [ "$trim_current_size" -gt "$MAX_RAM_LOG_BYTES" ] || return 0
+
+    trim_tmp_file="${RAM_LOG_FILE}.tmp"
+    tail -c "$MAX_RAM_LOG_BYTES" "$RAM_LOG_FILE" > "$trim_tmp_file" || return 1
+    mv "$trim_tmp_file" "$RAM_LOG_FILE"
+}
+
+sys_ram_log_size_bytes() {
+    if [ -f "$SYS_RAM_LOG_FILE" ]; then
+        wc -c < "$SYS_RAM_LOG_FILE"
+    else
+        printf '0\n'
+    fi
+}
+
+trim_sys_ram_log_to_limit() {
+    trim_current_size="$(sys_ram_log_size_bytes)"
+
+    [ "$trim_current_size" -gt "$MAX_RAM_LOG_BYTES" ] || return 0
+
+    trim_tmp_file="${SYS_RAM_LOG_FILE}.tmp"
+    tail -c "$MAX_RAM_LOG_BYTES" "$SYS_RAM_LOG_FILE" > "$trim_tmp_file" || return 1
+    mv "$trim_tmp_file" "$SYS_RAM_LOG_FILE"
+}
+
+sync_sys_log_source_to_ram() {
+    sync_current_offset="$(read_sys_log_offset)"
+
+    ensure_sys_log_source_file || return 1
+    ensure_sys_ram_log_file || return 1
+
+    sync_current_size="$(wc -c < "$SYS_LOG_SOURCE_FILE" 2>/dev/null || printf '0\n')"
+    case "$sync_current_size" in
+        ''|*[!0-9]*)
+            sync_current_size=0
+            ;;
+    esac
+    case "$sync_current_offset" in
+        ''|*[!0-9]*)
+            sync_current_offset=0
+            ;;
+    esac
+
+    if [ "$sync_current_size" -lt "$sync_current_offset" ]; then
+        sync_current_offset=0
+    fi
+
+    [ "$sync_current_size" -gt "$sync_current_offset" ] || return 0
+
+    if [ "$sync_current_offset" -eq 0 ]; then
+        cat "$SYS_LOG_SOURCE_FILE" >> "$SYS_RAM_LOG_FILE" || return 1
+    else
+        tail -c "+$((sync_current_offset + 1))" "$SYS_LOG_SOURCE_FILE" >> "$SYS_RAM_LOG_FILE" || return 1
+    fi
+
+    write_sys_log_offset "$sync_current_size"
+    return 0
+}
+
+target_storage_usage_percent() {
+    usage_target_dir="$1"
+
+    df -P "$usage_target_dir" 2>/dev/null | awk 'NR==2 { gsub("%", "", $5); print $5 }'
+}
+
+cleanup_old_logs() {
+    cleanup_target_dir="$1"
+
+    find "$cleanup_target_dir" -maxdepth 1 -type f -name "${LOG_FILE_PREFIX}_*.log" -mtime +"$RETENTION_DAYS" -exec rm -f {} \; 2>/dev/null || true
+}
+
+cleanup_old_sys_logs() {
+    cleanup_target_dir="$1"
+
+    find "$cleanup_target_dir" -maxdepth 1 -type f -name "${SYS_LOG_FILE_PREFIX}_*.log" -mtime +"$RETENTION_DAYS" -exec rm -f {} \; 2>/dev/null || true
+}
+
+flush_ram_log_to_target() {
+    flush_target_dir="$1"
+    flush_target_file="$2"
+    flush_usage_percent=0
+
+    [ -s "$RAM_LOG_FILE" ] || return 0
+
+    flush_usage_percent="$(target_storage_usage_percent "$flush_target_dir" 2>/dev/null || printf '0\n')"
+    case "$flush_usage_percent" in
+        ''|*[!0-9]*)
+            flush_usage_percent=0
+            ;;
+    esac
+
+    if [ "$flush_usage_percent" -ge "$STORAGE_USAGE_LIMIT_PERCENT" ]; then
+        return 2
+    fi
+
+    mkdir -p "$flush_target_dir" || return 1
+    cat "$RAM_LOG_FILE" >> "$flush_target_file" || return 1
+    : > "$RAM_LOG_FILE" || return 1
+    cleanup_old_logs "$flush_target_dir"
+    return 0
+}
+
+flush_sys_log_to_target() {
+    flush_target_dir="$1"
+    flush_target_file="$2"
+    flush_usage_percent=0
+
+    ensure_sys_ram_log_file || return 1
+    [ -s "$SYS_RAM_LOG_FILE" ] || return 0
+
+    flush_usage_percent="$(target_storage_usage_percent "$flush_target_dir" 2>/dev/null || printf '0\n')"
+    case "$flush_usage_percent" in
+        ''|*[!0-9]*)
+            flush_usage_percent=0
+            ;;
+    esac
+
+    if [ "$flush_usage_percent" -ge "$STORAGE_USAGE_LIMIT_PERCENT" ]; then
+        return 2
+    fi
+
+    mkdir -p "$flush_target_dir" || return 1
+    cat "$SYS_RAM_LOG_FILE" >> "$flush_target_file" || return 1
+    : > "$SYS_RAM_LOG_FILE" || return 1
+    cleanup_old_sys_logs "$flush_target_dir"
+    return 0
+}
+
+evaluate_target_status() {
+    eval_target="$1"
+    eval_selected_device="${2:-}"
+    eval_resolved_device="$eval_selected_device"
+
+    target_state="UNKNOWN"
+    target_dir="-"
+    target_file="-"
+    reason="target-state-unknown"
+
+    case "$eval_target" in
+        SD)
+            target_state="$(read_storage_state_field "SD_STATE" 2>/dev/null || printf 'NOT_CONNECTED\n')"
+            if [ "$target_state" = "MOUNTED" ]; then
+                target_dir="$(resolve_target_dir "$eval_target" 2>/dev/null || printf '%s\n' "-")"
+                target_file="$(resolve_target_log_file "$target_dir" 2>/dev/null || printf '%s\n' "-")"
+                if [ "$target_dir" = "-" ] || ! is_path_usable "$eval_target" "$target_dir"; then
+                    reason="target-not-ready"
+                else
+                    reason="target-mounted"
+                fi
+            elif [ "$target_state" = "UNMOUNTED" ]; then
+                reason="target-unmounted"
+            else
+                reason="target-not-connected"
+            fi
+            ;;
+        USB)
+            if [ -n "$eval_selected_device" ]; then
+                eval_resolved_device="$(find_best_usb_device "$eval_selected_device" 2>/dev/null || printf '\n')"
+            else
+                eval_resolved_device="$(find_best_usb_device "" 2>/dev/null || printf '\n')"
+            fi
+
+            if [ -n "$eval_resolved_device" ]; then
+                target_state="$(resolve_selected_usb_field "$eval_resolved_device" "STATE" 2>/dev/null || printf 'NOT_CONNECTED\n')"
+                target_dir="$(resolve_target_dir "$eval_target" "$eval_resolved_device" 2>/dev/null || printf '%s\n' "-")"
+                target_file="$(resolve_target_log_file "$target_dir" 2>/dev/null || printf '%s\n' "-")"
+                selected_device="$eval_resolved_device"
+            else
+                target_state="$(read_storage_state_field "USB_STATE" 2>/dev/null || printf 'NOT_CONNECTED\n')"
+                selected_device=""
+            fi
+
+            if [ "$target_state" = "MOUNTED" ]; then
+                if [ "$target_dir" = "-" ] || ! is_path_usable "$eval_target" "$target_dir"; then
+                    reason="target-not-ready"
+                else
+                    reason="target-mounted"
+                fi
+            elif [ "$target_state" = "UNMOUNTED" ]; then
+                reason="target-unmounted"
+            else
+                reason="target-not-connected"
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+monitor_cleanup() {
+    write_status "STOPPED" "NONE" "-" "-" "-" "service-stopped" "$RAM_LOG_FILE" "-" "-" "0" "0" "0" "-" "-" "0" "0"
+    exit 0
+}
+
+monitor_loop() {
+    last_target=""
+    last_state=""
+    last_reason=""
+    last_target_dir=""
+    last_target_file=""
+    last_marker_key=""
+    marker_status="IDLE"
+    last_flush_epoch="$(date '+%s')"
+    last_sys_flush_epoch="$(date '+%s')"
+    last_log_write_at="-"
+    last_log_write_epoch=0
+    last_flush_at="-"
+    last_flush_epoch_value=0
+    last_sys_flush_at="-"
+    last_sys_flush_epoch_value=0
+    sys_log_size=0
+    fallback_target=""
+    fallback_device=""
+    last_requested_key=""
+    last_connected_mount_key=""
+    cleanup_pending=0
+
+    trap monitor_cleanup INT TERM
+
+    manager_log "starting log manager"
+    write_status "STARTING" "$(normalize_target "$(read_target)")" "-" "-" "-" "service-start" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "0" "$last_log_write_epoch" "$last_flush_epoch_value" "-" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "0"
+
+    while true; do
+        now_epoch="$(date '+%s')"
+        logging_enabled="$(read_logging_enabled)"
+        target_raw="$(read_target)"
+        requested_target="$(normalize_target "$target_raw")"
+        requested_device="$(read_target_device)"
+        requested_key="${requested_target}|${requested_device}"
+        target="$requested_target"
+        target_device="$requested_device"
+        target_dir="-"
+        target_file="-"
+        state="WAITING"
+        reason="target-state-unknown"
+        target_state="UNKNOWN"
+        sys_target_dir="-"
+        sys_target_file="-"
+
+        if [ "$requested_key" != "$last_requested_key" ]; then
+            fallback_target=""
+            fallback_device=""
+            last_requested_key="$requested_key"
+        fi
+
+        if ! ensure_ram_log_file; then
+            write_status "WAITING" "$target" "$target_device" "-" "-" "ram-log-unavailable" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
+            sleep "$POLL_INTERVAL_SECS"
+            continue
+        fi
+
+        if ! ensure_sys_ram_log_file; then
+            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-ram-log-unavailable" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
+            sleep "$POLL_INTERVAL_SECS"
+            continue
+        fi
+
+        if ! ensure_sys_log_source_file; then
+            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-log-unavailable" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
+            sleep "$POLL_INTERVAL_SECS"
+            continue
+        fi
+
+        if ! trim_ram_log_to_limit; then
+            write_status "WAITING" "$target" "$target_device" "-" "-" "ram-log-trim-failed" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
+            sleep "$POLL_INTERVAL_SECS"
+            continue
+        fi
+
+        if ! sync_sys_log_source_to_ram; then
+            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-log-sync-failed" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
+            sleep "$POLL_INTERVAL_SECS"
+            continue
+        fi
+
+        if ! trim_sys_ram_log_to_limit; then
+            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-ram-log-trim-failed" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
+            sleep "$POLL_INTERVAL_SECS"
+            continue
+        fi
+
+        ram_log_size="$(ram_log_size_bytes)"
+        sys_log_size="$(sys_ram_log_size_bytes)"
+        case "$ram_log_size" in
+            ''|*[!0-9]*)
+                ram_log_size=0
+                ;;
+        esac
+        case "$sys_log_size" in
+            ''|*[!0-9]*)
+                sys_log_size=0
+                ;;
+        esac
+
+        if [ "$logging_enabled" = "0" ]; then
+            state="IDLE"
+            reason="logging-disabled"
+        else
+            case "$requested_target" in
+                SD)
+                    if [ "$fallback_target" = "USB" ]; then
+                        target="USB"
+                        target_device="$fallback_device"
+                        evaluate_target_status "$target" "$target_device"
+                        target_device="${selected_device:-$fallback_device}"
+
+                        if [ "$reason" != "target-mounted" ]; then
+                            evaluate_target_status "SD" ""
+                            if [ "$reason" = "target-mounted" ]; then
+                                fallback_target=""
+                                fallback_device=""
+                                target="SD"
+                                target_device=""
+                            else
+                                fallback_candidate="$(find_first_ready_usb_device 2>/dev/null || printf '\n')"
+                                if [ -n "$fallback_candidate" ]; then
+                                    fallback_target="USB"
+                                    fallback_device="$fallback_candidate"
+                                    target="USB"
+                                    target_device="$fallback_device"
+                                    evaluate_target_status "$target" "$target_device"
+                                    target_device="${selected_device:-$fallback_device}"
+                                else
+                                    target="SD"
+                                    target_device=""
+                                fi
+                            fi
+                        fi
+                    else
+                        evaluate_target_status "SD" ""
+                        if [ "$reason" = "target-mounted" ]; then
+                            target="SD"
+                            target_device=""
+                        else
+                            fallback_candidate="$(find_first_ready_usb_device 2>/dev/null || printf '\n')"
+                            if [ -n "$fallback_candidate" ]; then
+                                fallback_target="USB"
+                                fallback_device="$fallback_candidate"
+                                target="USB"
+                                target_device="$fallback_device"
+                                evaluate_target_status "$target" "$target_device"
+                                target_device="${selected_device:-$fallback_device}"
+                            else
+                                target="SD"
+                                target_device=""
+                            fi
+                        fi
+                    fi
+                    ;;
+                USB)
+                    if [ "$fallback_target" = "SD" ]; then
+                        evaluate_target_status "USB" "${requested_device:-}"
+                        target="USB"
+                        target_device="${selected_device:-${requested_device:-}}"
+                        if [ "$reason" = "target-mounted" ]; then
+                            fallback_target=""
+                            fallback_device=""
+                        else
+                            evaluate_target_status "SD" ""
+                            if [ "$reason" = "target-mounted" ]; then
+                                target="SD"
+                                target_device=""
+                            else
+                                target="USB"
+                                target_device="${selected_device:-${requested_device:-}}"
+                            fi
+                        fi
+                    else
+                        evaluate_target_status "USB" "${requested_device:-}"
+                        target="USB"
+                        target_device="${selected_device:-${requested_device:-}}"
+                        if [ "$reason" != "target-mounted" ]; then
+                            evaluate_target_status "SD" ""
+                            if [ "$reason" = "target-mounted" ]; then
+                                fallback_target="SD"
+                                fallback_device=""
+                                target="SD"
+                                target_device=""
+                            else
+                                target="USB"
+                                target_device="${selected_device:-${requested_device:-}}"
+                            fi
+                        else
+                            fallback_target=""
+                            fallback_device=""
+                        fi
+                    fi
+                    ;;
+            esac
+        fi
+
+        marker_key="${logging_enabled}|${target}|${target_device}|${target_state}|${target_dir}|${target_file}"
+        if [ "$marker_key" != "$last_marker_key" ]; then
+            marker_status="IDLE"
+            last_marker_key="$marker_key"
+        fi
+
+        current_mount_key=""
+        if [ "$reason" = "target-mounted" ]; then
+            current_mount_key="${target}|${target_device}|${target_dir}"
+            if [ "$current_mount_key" != "$last_connected_mount_key" ]; then
+                cleanup_pending="1"
+                last_connected_mount_key="$current_mount_key"
+            fi
+
+            target_base_dir="${target_dir%/${APP_STORAGE_LOG_DIR_RELATIVE}}"
+            sys_target_dir="$(resolve_log_dir_from_base "$target_base_dir" "$SYS_STORAGE_LOG_DIR_RELATIVE" 2>/dev/null || printf '%s\n' "-")"
+            sys_target_file="$(resolve_sys_target_log_file "$sys_target_dir" 2>/dev/null || printf '%s\n' "-")"
+        else
+            last_connected_mount_key=""
+        fi
+
+        if [ "$reason" = "target-mounted" ]; then
+            if [ "$cleanup_pending" = "1" ]; then
+                cleanup_old_logs "$target_dir"
+                if [ "$sys_target_dir" != "-" ]; then
+                    cleanup_old_sys_logs "$sys_target_dir"
+                fi
+                cleanup_pending="0"
+            fi
+
+            if [ "$marker_status" = "IDLE" ]; then
+                if ensure_target_files "$target_dir" "$target_file"; then
+                    if [ "$sys_target_dir" != "-" ]; then
+                        mkdir -p "$sys_target_dir" || {
+                            marker_status="FAILED"
+                            state="WAITING"
+                            reason="target-io-error"
+                            write_status "$state" "$target" "$target_device" "$target_dir" "$target_file" "$reason" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "$ram_log_size" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "$sys_log_size"
+                            sleep "$POLL_INTERVAL_SECS"
+                            continue
+                        }
+                        : >> "$sys_target_file" || {
+                            marker_status="FAILED"
+                            state="WAITING"
+                            reason="target-io-error"
+                            write_status "$state" "$target" "$target_device" "$target_dir" "$target_file" "$reason" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "$ram_log_size" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "$sys_log_size"
+                            sleep "$POLL_INTERVAL_SECS"
+                            continue
+                        }
+                    fi
+                    marker_status="DONE"
+                    state="ACTIVE"
+                    last_log_write_at="$(timestamp)"
+                    last_log_write_epoch="$now_epoch"
+                    reason="target-ready"
+                else
+                    marker_status="FAILED"
+                    state="WAITING"
+                    reason="target-io-error"
+                fi
+            elif [ "$marker_status" = "DONE" ]; then
+                state="ACTIVE"
+                reason="target-ready"
+            else
+                state="WAITING"
+                reason="target-io-error"
+            fi
+
+            if [ "$state" = "ACTIVE" ] && [ "$ram_log_size" -gt 0 ]; then
+                if [ "$ram_log_size" -ge "$MAX_RAM_LOG_BYTES" ] ||
+                   [ $((now_epoch - last_flush_epoch)) -ge "$FLUSH_INTERVAL_SECS" ]; then
+                    if flush_ram_log_to_target "$target_dir" "$target_file"; then
+                        last_flush_epoch="$now_epoch"
+                        last_log_write_at="$(timestamp)"
+                        last_log_write_epoch="$now_epoch"
+                        last_flush_at="$(timestamp)"
+                        last_flush_epoch_value="$now_epoch"
+                        reason="target-ready"
+                    else
+                        flush_result="$?"
+                        state="WAITING"
+                        if [ "$flush_result" -eq 2 ]; then
+                            reason="target-storage-full"
+                        else
+                            reason="target-flush-failed"
+                        fi
+                    fi
+                fi
+            fi
+
+            if [ "$state" = "ACTIVE" ] &&
+               [ "$sys_target_dir" != "-" ] &&
+               [ "$sys_log_size" -gt 0 ] &&
+               [ $((now_epoch - last_sys_flush_epoch)) -ge "$FLUSH_INTERVAL_SECS" ]; then
+                if flush_sys_log_to_target "$sys_target_dir" "$sys_target_file"; then
+                    last_sys_flush_epoch="$now_epoch"
+                    last_sys_flush_at="$(timestamp)"
+                    last_sys_flush_epoch_value="$now_epoch"
+                    sys_log_size="$(sys_ram_log_size_bytes)"
+                    reason="target-ready"
+                else
+                    flush_result="$?"
+                    state="WAITING"
+                    if [ "$flush_result" -eq 2 ]; then
+                        reason="target-storage-full"
+                    else
+                        reason="target-syslog-flush-failed"
+                    fi
+                fi
+            fi
+        fi
+
+        if [ "$target" != "$last_target" ] ||
+           [ "$state" != "$last_state" ] ||
+           [ "$reason" != "$last_reason" ] ||
+           [ "$target_dir" != "$last_target_dir" ] ||
+           [ "$target_file" != "$last_target_file" ]; then
+            manager_log "state=${state} target=${target} dir=${target_dir} file=${target_file} reason=${reason}"
+            last_target="$target"
+            last_state="$state"
+            last_reason="$reason"
+            last_target_dir="$target_dir"
+            last_target_file="$target_file"
+        fi
+
+        write_status "$state" "$target" "$target_device" "$target_dir" "$target_file" "$reason" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "$ram_log_size" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "$sys_log_size"
+        sleep "$POLL_INTERVAL_SECS"
+    done
+}
+
+monitor_loop

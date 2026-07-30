@@ -1,2 +1,2 @@
-* * * * * /usr/bin/syslog-sync.sh
-
+# Disabled: replaced by wings-log-manager service
+#* * * * * /usr/bin/syslog-sync.sh

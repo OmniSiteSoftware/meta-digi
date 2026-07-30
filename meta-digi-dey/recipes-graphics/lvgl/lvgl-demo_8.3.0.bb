@@ -10,6 +10,8 @@ SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
     file://wings.service \
     file://wings-launcher \
+    file://wings-log-manager.service \
+    file://wings-log-manager \
     file://99-eth1-100mbps \
     file://cert \
 "
@@ -168,6 +170,7 @@ do_install:append() {
     if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
         install -d ${D}${systemd_unitdir}/system
         install -m 0644 ${WORKDIR}/wings.service ${D}${systemd_unitdir}/system/
+        install -m 0644 ${WORKDIR}/wings-log-manager.service ${D}${systemd_unitdir}/system/
         sed -i -e "s,##WESTON_SERVICE##,${WESTON_SERVICE},g" \
                "${D}${systemd_unitdir}/system/wings.service"
     fi
@@ -175,6 +178,7 @@ do_install:append() {
     # Install the trusted launcher into read-only rootfs.
     install -d ${D}${bindir}
     install -m 0755 ${WORKDIR}/wings-launcher ${D}${bindir}/wings-launcher
+    install -m 0755 ${WORKDIR}/wings-log-manager ${D}${bindir}/wings-log-manager
     sed -i -e "s@##LVGL_DEMO_DISPLAY##@${LVGL_DEMO_DISPLAY}@g" \
            -e "s@##LVGL_DEMO_ENV##@${LVGL_DEMO_ENV}@g" \
            "${D}${bindir}/wings-launcher"
@@ -187,13 +191,15 @@ do_install:append() {
 
 FILES:${PN} += " \
     ${bindir}/wings-launcher \
+    ${bindir}/wings-log-manager \
     ${systemd_unitdir}/system/wings.service \
+    ${systemd_unitdir}/system/wings-log-manager.service \
     ${sysconfdir}/wings/ \
     ${datadir}/wings/ \
     ${sysconfdir}/NetworkManager/dispatcher.d/99-eth1-100mbps \
 "
 RDEPENDS:${PN} += "ethtool libmodbus openssl"
 
-SYSTEMD_SERVICE:${PN} = "wings.service"
+SYSTEMD_SERVICE:${PN} = "wings.service wings-log-manager.service"
 
 COMPATIBLE_MACHINE = "(ccimx6$|ccimx6ul|ccimx8m|ccimx8x|ccimx93|ccmp15|ccmp2)"
