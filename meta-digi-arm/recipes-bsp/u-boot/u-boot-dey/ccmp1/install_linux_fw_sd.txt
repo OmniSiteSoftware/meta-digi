@@ -11,6 +11,14 @@ setenv INSTALL_ATF_FILENAME tf-a-##MACHINE##-${module_ram}-nand.stm32
 setenv INSTALL_FIP_FILENAME fip-##MACHINE##-${module_ram}-optee.bin
 setenv INSTALL_MMCDEV 1
 
+if test "${trustfence}" = "yes"; then
+	setenv INSTALL_ATF_FILENAME tf-a-##MACHINE##-${module_ram}-nand.stm32##SIGNED_TFA##
+	setenv INSTALL_FIP_FILENAME fip-##MACHINE##-${module_ram}-optee##SIGNED##.bin
+	setenv INSTALL_DBOOT_KERNEL_VAR fitimage
+else
+	setenv INSTALL_DBOOT_KERNEL_VAR
+fi
+
 if test -z "${image-name}"; then
 	setenv image-name ##DEFAULT_IMAGE_NAME##
 fi
@@ -53,6 +61,8 @@ fi
 if test "${install_abort}" = "1"; then
 	echo "To install a different image, set variable 'image-name', e.g.:"
 	echo "  => setenv image-name core-image-base"
+	echo "To install TrustFence artifacts, set variable 'trustfence', e.g.:"
+	echo "  => setenv trustfence yes"
 	echo "Aborted.";
 	exit;
 fi
@@ -166,6 +176,9 @@ setenv bootcmd "
 	setenv dualboot ${dualboot};
 	setenv rootfstype ${rootfstype};
 	setenv install_dualboot ${install_dualboot};
+	if test \"${INSTALL_DBOOT_KERNEL_VAR}\" = \"fitimage\"; then
+		setenv dboot_kernel_var fitimage;
+	fi;
 	run ubivolscript;
 	if test \"\$\{dualboot\}\" = yes; then
 		echo \"\";

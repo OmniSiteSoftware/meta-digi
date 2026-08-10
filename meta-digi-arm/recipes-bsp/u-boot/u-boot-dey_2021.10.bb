@@ -11,6 +11,7 @@ SRCBRANCH = "read_only_uboot"
 
 SRC_URI = " \
     ${UBOOT_URI_GITHUB};branch=${SRCBRANCH};name=bootloader \
+    ${INSTALL_FW_UBOOT_SCRIPTS} \
     ${@oe.utils.conditional('TRUSTFENCE_SIGN_FIT_STM', '1', 'file://fit_signature.cfg', '', d)} \
 "
 SRCREV_bootloader =  "${AUTOREV}"

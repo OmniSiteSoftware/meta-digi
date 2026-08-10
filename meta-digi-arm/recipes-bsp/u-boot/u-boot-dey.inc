@@ -38,6 +38,8 @@ SRCREV_FORMAT = "bootloader"
 
 
 BUILD_UBOOT_SCRIPTS ?= "true"
+FIT_HASH_ALG ?= "sha256"
+FIT_SIGN_ALG ?= "rsa2048"
 
 BOOTLOADER_IMAGE_RECIPE ?= "u-boot"
 
@@ -109,7 +111,43 @@ build_uboot_scripts() {
 			fi
 		fi
 		if [ "${f_ext}" = "txt" ]; then
-			mkimage -T script -n "DEY firmware install script" -C none -d ${TMP_INSTALL_SCR} ${DEPLOYDIR}/${f%.*}.scr
+			if [ "${TRUSTFENCE_SIGN}" = "1" ] && [ "${UBOOT_SIGN_ENABLE}" = "1" ]; then
+				TMP_INSTALL_ITS="$(mktemp ${WORKDIR}/${f}.its.XXXXXX)"
+				cat > ${TMP_INSTALL_ITS} << EOF
+/dts-v1/;
+
+/ {
+	description = "DEY firmware install script";
+	#address-cells = <1>;
+
+	images {
+		script {
+			description = "${f%.*}";
+			data = /incbin/("${TMP_INSTALL_SCR}");
+			type = "script";
+			arch = "arm";
+			compression = "none";
+			signature {
+				algo = "${FIT_HASH_ALG},${FIT_SIGN_ALG}";
+				key-name-hint = "${UBOOT_SIGN_IMG_KEYNAME}";
+			};
+		};
+	};
+
+	configurations {
+		default = "conf";
+		conf {
+			description = "${f%.*}";
+			script = "script";
+		};
+	};
+};
+EOF
+				mkimage -f ${TMP_INSTALL_ITS} -k "${UBOOT_SIGN_KEYDIR}" -r ${DEPLOYDIR}/${f%.*}.scr
+				rm -f ${TMP_INSTALL_ITS}
+			else
+				mkimage -A arm -O linux -T script -n "DEY firmware install script" -C none -d ${TMP_INSTALL_SCR} ${DEPLOYDIR}/${f%.*}.scr
+			fi
 		else
 			install -m 775 ${TMP_INSTALL_SCR} ${DEPLOYDIR}/${f}
 		fi
@@ -119,7 +157,7 @@ build_uboot_scripts() {
 	# Boot script for DEY images (reconfigure on-the-fly if TRUSTFENCE is enabled)
 	TMP_BOOTSCR="$(mktemp ${WORKDIR}/bootscr.XXXXXX)"
 	sed -e "${TF_BOOTSCRIPT_SEDFILTER}" ${WORKDIR}/boot.txt > ${TMP_BOOTSCR}
-	mkimage -T script -n bootscript -C none -d ${TMP_BOOTSCR} ${DEPLOYDIR}/boot.scr
+	mkimage -A arm -O linux -T script -n bootscript -C none -d ${TMP_BOOTSCR} ${DEPLOYDIR}/boot.scr
 	rm -f ${TMP_BOOTSCR}
 
 	# Sign the boot script if not contained in a FIT image

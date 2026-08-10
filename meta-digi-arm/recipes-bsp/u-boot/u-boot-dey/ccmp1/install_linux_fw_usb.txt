@@ -11,6 +11,24 @@ setenv INSTALL_ATF_FILENAME tf-a-##MACHINE##-${module_ram}-nand.stm32
 setenv INSTALL_FIP_FILENAME fip-##MACHINE##-${module_ram}-optee.bin
 setenv INSTALL_USBDEV 0
 
+# The brain board USB storage path is enabled through a GPIO. Reassert it here
+# and again after the bootloader reset before loading files from the USB stick.
+if test -z "${usb_enable_gpio}"; then
+	setenv usb_enable_gpio GPIOA10
+fi
+echo "Enabling USB storage power on ${usb_enable_gpio}"
+gpio set ${usb_enable_gpio}
+sleep 2
+usb reset
+
+if test "${trustfence}" = "yes"; then
+	setenv INSTALL_ATF_FILENAME tf-a-##MACHINE##-${module_ram}-nand.stm32##SIGNED_TFA##
+	setenv INSTALL_FIP_FILENAME fip-##MACHINE##-${module_ram}-optee##SIGNED##.bin
+	setenv INSTALL_DBOOT_KERNEL_VAR fitimage
+else
+	setenv INSTALL_DBOOT_KERNEL_VAR
+fi
+
 if test -z "${image-name}"; then
 	setenv image-name ##DEFAULT_IMAGE_NAME##
 fi
@@ -55,6 +73,8 @@ fi
 if test "${install_abort}" = "1"; then
 	echo "To install a different image, set variable 'image-name', e.g.:"
 	echo "  => setenv image-name core-image-base"
+	echo "To install TrustFence artifacts, set variable 'trustfence', e.g.:"
+	echo "  => setenv trustfence yes"
 	echo "Aborted.";
 	exit;
 fi
@@ -168,8 +188,15 @@ setenv bootcmd "
 	setenv dualboot ${dualboot};
 	setenv rootfstype ${rootfstype};
 	setenv install_dualboot ${install_dualboot};
+	setenv usb_enable_gpio ${usb_enable_gpio};
+	if test \"${INSTALL_DBOOT_KERNEL_VAR}\" = \"fitimage\"; then
+		setenv dboot_kernel_var fitimage;
+	fi;
 	run ubivolscript;
-	usb start;
+	echo \"Enabling USB storage power on \${usb_enable_gpio}\";
+	gpio set ${usb_enable_gpio};
+	sleep 2;
+	usb reset;
 	if test \"\$\{dualboot\}\" = yes; then
 		echo \"\";
 		echo \"\";
