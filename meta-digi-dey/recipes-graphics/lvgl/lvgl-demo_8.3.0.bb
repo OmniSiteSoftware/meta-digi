@@ -4,7 +4,7 @@ LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=802d3d83ae80ef5f343050bf96cce3a4 \
                     file://lvgl/LICENCE.txt;md5=bf1198c89ae87f043108cea62460b03a"
 
-SRCBRANCH ?= "ishanya-trustfence"
+SRCBRANCH ?= "master_production"
 
 SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
