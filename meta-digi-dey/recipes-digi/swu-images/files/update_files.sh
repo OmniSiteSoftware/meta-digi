@@ -27,6 +27,12 @@ LINUX_MOUNT_POINT="/mnt/linux"
 ROOTFS_DEV_BLOCK="/dev/mmcblk0p3"
 ROOTFS_MOUNT_POINT="/system"
 
+schedule_reboot() {
+	echo "Update completed successfully; scheduling reboot."
+	sync
+	(sleep 5; reboot -f) >/dev/null 2>&1 &
+}
+
 # Determines whether the file system type is UBI or not.
 is_ubifs() {
 	[ -c "/dev/ubi0" ]
@@ -136,7 +142,7 @@ fi
 
 # Called just after installation process ends.
 if [ "${1}" = "postinst" ]; then
-	:
+	schedule_reboot
 
 	# TODO: Execute custom code here. For example:
 	# - Clean directories.
