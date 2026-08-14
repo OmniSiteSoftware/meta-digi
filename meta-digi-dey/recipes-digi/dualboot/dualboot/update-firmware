@@ -105,6 +105,20 @@ show_active_system() {
 	fi
 }
 
+skip_cancelled_active_swap() {
+	local SWAP_BANK
+
+	SWAP_BANK="$(fw_printenv -n swap_bank 2>/dev/null || true)"
+	if [ "${SWAP_BANK}" = "false" ]; then
+		echo "[WARNING] Active system swap cancelled by update process."
+		# Reset variable and return without swapping.
+		fw_setenv swap_bank 2>/dev/null || true
+		return 0
+	fi
+
+	return 1
+}
+
 # $1: message to show
 reboot_system() {
 	if [ ${REBOOT} -eq 1 ]; then
@@ -118,11 +132,7 @@ reboot_system() {
 swap_active_system() {
 	# Sanity check: Some firmware updates might request not to swap
 	#               active bank after the update.
-	local SWAP_BANK=$(fw_printenv -n swap_bank)
-	if [ "${SWAP_BANK}" = "false" ]; then
-		echo "[WARNING] Active system swap cancelled by update process."
-		# Reset variable and return without swapping.
-		fw_setenv swap_bank
+	if skip_cancelled_active_swap; then
 		return 0
 	fi
 
@@ -241,6 +251,10 @@ while :; do
 	esac
 	shift
 done
+
+if [ ${SWAP_ACTIVE_SYSTEM} -eq 1 ] && skip_cancelled_active_swap; then
+	exit
+fi
 
 get_active_system || exit
 

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wings Team <support@omnisite.com>
+Date: Fri, 14 Aug 2026 00:00:00 +0000
+Subject: [PATCH] ccmp15: reduce 512MB dualboot rootfs volumes
+
+Reduce the ConnectCore MP15 512 MB NAND dualboot rootfs volumes from
+0x9600000 to 0x8200000 so the remaining UBI space is assigned to the
+data volume. This gives DRM/SWUpdate enough persistent staging space on
+read-only rootfs builds while keeping rootfs_a/rootfs_b large enough for
+the current squashfs image.
+
+Upstream-Status: Inappropriate [product storage layout]
+---
+ include/configs/ccmp15-dvk.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/configs/ccmp15-dvk.h b/include/configs/ccmp15-dvk.h
+--- a/include/configs/ccmp15-dvk.h
++++ b/include/configs/ccmp15-dvk.h
+@@ -225,8 +225,8 @@
+ 
+ #define UBIVOLS1_DUALBOOT_512MB		"ubi create " LINUX_A_PARTITION " 1000000;" \
+ 					"ubi create " LINUX_B_PARTITION ";"
+-#define UBIVOLS2_DUALBOOT_512MB		"ubi create " ROOTFS_A_PARTITION " 9600000;" \
+-					"ubi create " ROOTFS_B_PARTITION " 9600000;" \
++#define UBIVOLS2_DUALBOOT_512MB		"ubi create " ROOTFS_A_PARTITION " 8200000;" \
++					"ubi create " ROOTFS_B_PARTITION " 8200000;" \
+ 					"ubi create " DATA_PARTITION ";"
+ 
+ #define UBIVOLS1_DUALBOOT_1024MB	"ubi create " LINUX_A_PARTITION " 1000000;" \
+-- 
+2.34.1
