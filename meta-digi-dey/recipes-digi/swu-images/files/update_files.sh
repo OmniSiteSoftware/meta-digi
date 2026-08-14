@@ -30,7 +30,11 @@ ROOTFS_MOUNT_POINT="/system"
 schedule_reboot() {
 	echo "Update completed successfully; scheduling reboot."
 	sync
-	(sleep 5; reboot -f) >/dev/null 2>&1 &
+	if command -v systemd-run >/dev/null 2>&1; then
+		systemd-run --unit=wings-post-update-reboot --on-active=30 /bin/systemctl reboot >/dev/null 2>&1 || true
+	else
+		(sleep 30; reboot) >/dev/null 2>&1 &
+	fi
 }
 
 # Determines whether the file system type is UBI or not.
