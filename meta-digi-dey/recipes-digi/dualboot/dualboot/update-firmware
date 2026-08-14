@@ -137,9 +137,17 @@ swap_active_system() {
 	fi
 
 	if [ -z "${EMMCROOTFS}" ]; then
-		fw_setenv mtdbootpart ${ALT_BOOT}
-		fw_setenv mtdrootfspart ${ALT_ROOTFS}
-		fw_setenv rootfsvol ${ALT_ROOTFS}
+		# On CCMP15 dualboot, U-Boot derives mtdbootpart/rootfsvol from
+		# active_system at boot. Keep those legacy helper variables best-effort
+		# so a non-critical write cannot make DRM report a failed full-image
+		# update after SWUpdate has already installed the inactive bank.
+		fw_setenv bootcount 0 || echo "[WARNING] Unable to clear bootcount"
+		if ! fw_setenv active_system "${ALT_BOOT}"; then
+			echo "[ERROR] Unable to set active system to ${ALT_BOOT}"
+			return 1
+		fi
+		fw_setenv mtdbootpart "${ALT_BOOT}" || echo "[WARNING] Unable to set mtdbootpart"
+		fw_setenv rootfsvol "${ALT_ROOTFS}" || echo "[WARNING] Unable to set rootfsvol"
 	else
 		local PART_UUID=""
 
@@ -165,8 +173,10 @@ swap_active_system() {
 
 	fi
 
-	fw_setenv active_system ${ALT_BOOT}
-	fw_setenv bootcount 0
+	if [ -n "${EMMCROOTFS}" ]; then
+		fw_setenv active_system "${ALT_BOOT}"
+		fw_setenv bootcount 0
+	fi
 
 	return 0
 }
