@@ -152,13 +152,6 @@ do_install:append() {
         install -m 0644 "${TRUSTFENCE_PUBLIC_KEY}" ${D}${datadir}/wings/trustfence_key.pub
     fi
 
-    if [ -f ${S}/config.json ]; then
-        install -m 0644 ${S}/config.json ${D}${sysconfdir}/wings/config.json
-    fi
-    if [ -f ${S}/plc_settings.json ]; then
-        install -m 0644 ${S}/plc_settings.json ${D}${sysconfdir}/wings/plc_settings.json
-    fi
-
     # Create the target directory for certificates and copy all files.
     install -d ${D}${sysconfdir}/wings/cert
     cp -r ${WORKDIR}/cert/* ${D}${sysconfdir}/wings/cert/
