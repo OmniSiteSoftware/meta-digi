@@ -85,13 +85,25 @@ get_active_system() {
 	fi
 
 	if [ -z "${ACTIVE_SYSTEM}" ]; then
-		echo "[ERROR] Unable to get active system."
-		return 1
+		ACTIVE_SYSTEM="$(fw_printenv -n active_system 2>/dev/null || true)"
 	fi
 
-	ACTIVE_SYSTEM="${ACTIVE_SYSTEM##*_}"
+	case "${ACTIVE_SYSTEM}" in
+		linux_a|rootfs_a|a|/dev/ubi*_0)
+			ACTIVE_SYSTEM="a"
+			;;
+		linux_b|rootfs_b|b|/dev/ubi*_1)
+			ACTIVE_SYSTEM="b"
+			;;
+		*)
+			echo "[ERROR] Unable to get active system."
+			return 1
+			;;
+	esac
 
-	return 0
+	if [ "${ACTIVE_SYSTEM}" = "a" ] || [ "${ACTIVE_SYSTEM}" = "b" ]; then
+		return 0
+	fi
 }
 
 show_active_system() {
@@ -138,16 +150,15 @@ swap_active_system() {
 
 	if [ -z "${EMMCROOTFS}" ]; then
 		# On CCMP15 dualboot, U-Boot derives mtdbootpart/rootfsvol from
-		# active_system at boot. Keep those legacy helper variables best-effort
-		# so a non-critical write cannot make DRM report a failed full-image
-		# update after SWUpdate has already installed the inactive bank.
-		fw_setenv bootcount 0 || echo "[WARNING] Unable to clear bootcount"
+		# active_system at boot. Keep the post-update swap fast because CCCS
+		# waits synchronously for this command before reporting success to DRM.
+		if [ "$(fw_printenv -n bootcount 2>/dev/null || true)" != "0" ]; then
+			fw_setenv bootcount 0 || echo "[WARNING] Unable to clear bootcount"
+		fi
 		if ! fw_setenv active_system "${ALT_BOOT}"; then
 			echo "[ERROR] Unable to set active system to ${ALT_BOOT}"
 			return 1
 		fi
-		fw_setenv mtdbootpart "${ALT_BOOT}" || echo "[WARNING] Unable to set mtdbootpart"
-		fw_setenv rootfsvol "${ALT_ROOTFS}" || echo "[WARNING] Unable to set rootfsvol"
 	else
 		local PART_UUID=""
 

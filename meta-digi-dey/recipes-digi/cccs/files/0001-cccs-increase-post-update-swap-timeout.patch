@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wings Build <wings@example.com>
+Date: Sat, 15 Aug 2026 02:35:00 +0530
+Subject: [PATCH] cccs: increase post-update swap timeout
+
+On NAND/TrustFence systems, update-firmware may need several seconds to
+update the redundant U-Boot environment. CCCS runs the active-system swap
+synchronously after an on-the-fly SWU and previously allowed only two
+seconds, causing DRM to report a failed update even when the swap command
+completed successfully from the shell.
+
+Increase only this post-update swap command timeout to 30 seconds.
+
+Upstream-Status: Inappropriate [product-specific timeout for NAND/TrustFence]
+
+---
+ library/src/cc_firmware_update.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/library/src/cc_firmware_update.c b/library/src/cc_firmware_update.c
+--- a/library/src/cc_firmware_update.c
++++ b/library/src/cc_firmware_update.c
+@@ -1467,7 +1467,7 @@ static void firmware_reset_cb(unsigned int const target, ccapi_bool_t *system_reset
+ 		log_fw_debug("%s", "On-the-fly update finished. Now we will reboot the system");
+ 
+ 		/* Swap the active system partition */
+-		if (ldx_process_execute_cmd("update-firmware --swap-active-system --no-reboot", &resp, 2) != 0) {
++		if (ldx_process_execute_cmd("update-firmware --swap-active-system --no-reboot", &resp, 30) != 0) {
+ 			if (resp != NULL)
+ 				log_fw_error("Error swapping active system: %s", resp);
+ 			else
+-- 
+2.34.1
