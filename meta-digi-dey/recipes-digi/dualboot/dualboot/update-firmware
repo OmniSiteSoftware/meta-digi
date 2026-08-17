@@ -85,13 +85,25 @@ get_active_system() {
 	fi
 
 	if [ -z "${ACTIVE_SYSTEM}" ]; then
-		echo "[ERROR] Unable to get active system."
-		return 1
+		ACTIVE_SYSTEM="$(fw_printenv -n active_system 2>/dev/null || true)"
 	fi
 
-	ACTIVE_SYSTEM="${ACTIVE_SYSTEM##*_}"
+	case "${ACTIVE_SYSTEM}" in
+		linux_a|rootfs_a|a|/dev/ubi*_0)
+			ACTIVE_SYSTEM="a"
+			;;
+		linux_b|rootfs_b|b|/dev/ubi*_1)
+			ACTIVE_SYSTEM="b"
+			;;
+		*)
+			echo "[ERROR] Unable to get active system."
+			return 1
+			;;
+	esac
 
-	return 0
+	if [ "${ACTIVE_SYSTEM}" = "a" ] || [ "${ACTIVE_SYSTEM}" = "b" ]; then
+		return 0
+	fi
 }
 
 show_active_system() {
@@ -103,6 +115,20 @@ show_active_system() {
 	else
 		echo "${ACTIVE_SYSTEM}"
 	fi
+}
+
+skip_cancelled_active_swap() {
+	local SWAP_BANK
+
+	SWAP_BANK="$(fw_printenv -n swap_bank 2>/dev/null || true)"
+	if [ "${SWAP_BANK}" = "false" ]; then
+		echo "[WARNING] Active system swap cancelled by update process."
+		# Reset variable and return without swapping.
+		fw_setenv swap_bank 2>/dev/null || true
+		return 0
+	fi
+
+	return 1
 }
 
 # $1: message to show
@@ -118,18 +144,19 @@ reboot_system() {
 swap_active_system() {
 	# Sanity check: Some firmware updates might request not to swap
 	#               active bank after the update.
-	local SWAP_BANK=$(fw_printenv -n swap_bank)
-	if [ "${SWAP_BANK}" = "false" ]; then
-		echo "[WARNING] Active system swap cancelled by update process."
-		# Reset variable and return without swapping.
-		fw_setenv swap_bank
+	if skip_cancelled_active_swap; then
 		return 0
 	fi
 
 	if [ -z "${EMMCROOTFS}" ]; then
-		fw_setenv mtdbootpart ${ALT_BOOT}
-		fw_setenv mtdrootfspart ${ALT_ROOTFS}
-		fw_setenv rootfsvol ${ALT_ROOTFS}
+		# On CCMP15 dualboot, U-Boot derives mtdbootpart/rootfsvol from
+		# active_system at boot. Always clear bootcount before selecting the
+		# new bank so a successful OTA does not carry stale rollback state.
+		fw_setenv bootcount 0 || echo "[WARNING] Unable to clear bootcount"
+		if ! fw_setenv active_system "${ALT_BOOT}"; then
+			echo "[ERROR] Unable to set active system to ${ALT_BOOT}"
+			return 1
+		fi
 	else
 		local PART_UUID=""
 
@@ -155,8 +182,10 @@ swap_active_system() {
 
 	fi
 
-	fw_setenv active_system ${ALT_BOOT}
-	fw_setenv bootcount 0
+	if [ -n "${EMMCROOTFS}" ]; then
+		fw_setenv active_system "${ALT_BOOT}"
+		fw_setenv bootcount 0
+	fi
 
 	return 0
 }
@@ -241,6 +270,10 @@ while :; do
 	esac
 	shift
 done
+
+if [ ${SWAP_ACTIVE_SYSTEM} -eq 1 ] && skip_cancelled_active_swap; then
+	exit
+fi
 
 get_active_system || exit
 

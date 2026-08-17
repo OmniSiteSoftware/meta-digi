@@ -60,6 +60,10 @@ software =
                 {
                     name = "upgrade_available";
                     value = "@@UPGRADE_AVAILABLE@@";
+                },
+                {
+                    name = "swap_bank";
+                    value = "false";
                 }
             );
         }

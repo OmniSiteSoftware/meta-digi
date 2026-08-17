@@ -20,6 +20,7 @@ CCCS_CONF_PATH ?= ""
 
 SRC_URI = " \
     ${CC_GIT_URI};branch=${SRCBRANCH} \
+    file://0001-cccs-increase-post-update-swap-timeout.patch \
     file://cccsd-init \
     file://cccsd.service \
     file://cccs-gs-demo-init \
