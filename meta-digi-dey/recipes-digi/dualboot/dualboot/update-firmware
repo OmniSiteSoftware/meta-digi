@@ -150,11 +150,9 @@ swap_active_system() {
 
 	if [ -z "${EMMCROOTFS}" ]; then
 		# On CCMP15 dualboot, U-Boot derives mtdbootpart/rootfsvol from
-		# active_system at boot. Keep the post-update swap fast because CCCS
-		# waits synchronously for this command before reporting success to DRM.
-		if [ "$(fw_printenv -n bootcount 2>/dev/null || true)" != "0" ]; then
-			fw_setenv bootcount 0 || echo "[WARNING] Unable to clear bootcount"
-		fi
+		# active_system at boot. Always clear bootcount before selecting the
+		# new bank so a successful OTA does not carry stale rollback state.
+		fw_setenv bootcount 0 || echo "[WARNING] Unable to clear bootcount"
 		if ! fw_setenv active_system "${ALT_BOOT}"; then
 			echo "[ERROR] Unable to set active system to ${ALT_BOOT}"
 			return 1
