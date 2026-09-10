@@ -1,33 +1,31 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Wings Build <wings@example.com>
 Date: Sat, 15 Aug 2026 02:35:00 +0530
-Subject: [PATCH] cccs: increase post-update swap timeout
+Subject: [PATCH] cccs: increase update-firmware command timeouts
 
 On NAND/TrustFence systems, update-firmware may need several seconds to
-update the redundant U-Boot environment. CCCS runs the active-system swap
-synchronously after an on-the-fly SWU and previously allowed only two
-seconds, causing DRM to report a failed update even when the swap command
-completed successfully from the shell.
+query the active system and update the redundant U-Boot environment.
+CCCS runs these commands synchronously during on-the-fly SWU processing
+and previously allowed only two seconds, causing DRM to reject downloads
+or report a failed update even when the same command completed
+successfully from the shell.
 
-Increase only this post-update swap command timeout to 30 seconds.
+Increase only these update-firmware command timeouts to 30 seconds.
 
 Upstream-Status: Inappropriate [product-specific timeout for NAND/TrustFence]
 
 ---
- library/src/cc_firmware_update.c | 2 +-
- 1 file changed, 1 insertion(+), 1 deletion(-)
+ library/src/cc_firmware_update.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/library/src/cc_firmware_update.c b/library/src/cc_firmware_update.c
 --- a/library/src/cc_firmware_update.c
 +++ b/library/src/cc_firmware_update.c
-@@ -1467,7 +1467,7 @@ static void firmware_reset_cb(unsigned int const target, ccapi_bool_t *system_reset
- 		log_fw_debug("%s", "On-the-fly update finished. Now we will reboot the system");
- 
- 		/* Swap the active system partition */
+@@ -1182 +1182 @@ static int firmware_on_the_fly(const unsigned int target)
+-		if (ldx_process_execute_cmd("update-firmware -a -s", &resp, 2) != 0 || resp == NULL) {
++		if (ldx_process_execute_cmd("update-firmware -a -s", &resp, 30) != 0 || resp == NULL) {
+@@ -1470 +1470 @@ static void firmware_reset_cb(unsigned int const target, ccapi_bool_t *system_reset
 -		if (ldx_process_execute_cmd("update-firmware --swap-active-system --no-reboot", &resp, 2) != 0) {
 +		if (ldx_process_execute_cmd("update-firmware --swap-active-system --no-reboot", &resp, 30) != 0) {
- 			if (resp != NULL)
- 				log_fw_error("Error swapping active system: %s", resp);
- 			else
 -- 
 2.34.1

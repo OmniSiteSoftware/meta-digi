@@ -26,6 +26,85 @@ LINUX_DEV_BLOCK="/dev/mmcblk0p1"
 LINUX_MOUNT_POINT="/mnt/linux"
 ROOTFS_DEV_BLOCK="/dev/mmcblk0p3"
 ROOTFS_MOUNT_POINT="/system"
+OTA_STATUS_DIR="/etc/wings/fw-update"
+OTA_STATUS_FILE="${OTA_STATUS_DIR}/software-update-status.json"
+
+timestamp_utc() {
+	date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+read_ota_status_field() {
+	key="${1}"
+
+	[ -r "${OTA_STATUS_FILE}" ] || return 1
+	sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "${OTA_STATUS_FILE}" | head -n 1
+}
+
+write_ota_status() {
+	status="${1}"
+	phase="${2}"
+	message="${3}"
+	rc="${4:-0}"
+	error_stage="${5:-}"
+	ts="$(timestamp_utc)"
+	active="true"
+	component="wings_app"
+	source="$(read_ota_status_field source || true)"
+	started_at="$(read_ota_status_field started_at || true)"
+	update_id="$(read_ota_status_field update_id || true)"
+	package_name="$(read_ota_status_field package_name || true)"
+	expected_version="$(read_ota_status_field expected_version || true)"
+	current_version="$(read_ota_status_field current_version || true)"
+	rc_json="${rc}"
+	error_stage_json="null"
+	completed_at_json="null"
+
+	case "${status}" in
+		success|failed|blocked|verify_failed|interrupted) active="false" ;;
+	esac
+	case "${status}" in
+		success|failed|blocked|verify_failed|interrupted) ;;
+		*) rc_json="null" ;;
+	esac
+	if [ -n "${error_stage}" ]; then
+		error_stage_json="\"$(json_escape "${error_stage}")\""
+	fi
+	if [ "${active}" = "false" ]; then
+		completed_at_json="\"${ts}\""
+	fi
+	[ -n "${source}" ] || source="drm"
+	[ -n "${started_at}" ] || started_at="${ts}"
+	[ -n "${update_id}" ] || update_id="${started_at}-${component}"
+
+	mkdir -p "${OTA_STATUS_DIR}" 2>/dev/null || true
+	{
+		printf '{\n'
+		printf '  "reportType": "ota_status",\n'
+		printf '  "active": %s,\n' "${active}"
+		printf '  "update_id": "%s",\n' "$(json_escape "${update_id}")"
+		printf '  "component": "%s",\n' "${component}"
+		printf '  "source": "%s",\n' "$(json_escape "${source}")"
+		printf '  "phase": "%s",\n' "$(json_escape "${phase}")"
+		printf '  "status": "%s",\n' "$(json_escape "${status}")"
+		printf '  "package_name": "%s",\n' "$(json_escape "${package_name}")"
+		printf '  "expected_version": "%s",\n' "$(json_escape "${expected_version}")"
+		printf '  "current_version": "%s",\n' "$(json_escape "${current_version}")"
+		printf '  "port": null,\n'
+		printf '  "return_code": %s,\n' "${rc_json}"
+		printf '  "error_stage": %s,\n' "${error_stage_json}"
+		printf '  "message": "%s",\n' "$(json_escape "${message}")"
+		printf '  "recovery_action": "Device should reboot after SWUpdate completes",\n'
+		printf '  "reboot_required": true,\n'
+		printf '  "started_at": "%s",\n' "${started_at}"
+		printf '  "completed_at": %s,\n' "${completed_at_json}"
+		printf '  "timestamp": "%s"\n' "${ts}"
+		printf '}\n'
+	} > "${OTA_STATUS_FILE}.tmp" && mv "${OTA_STATUS_FILE}.tmp" "${OTA_STATUS_FILE}"
+}
 
 schedule_reboot() {
 	echo "Update completed successfully; scheduling reboot."
@@ -137,6 +216,7 @@ mount_partitions() {
 
 # Called just before installation process starts.
 if [ "${1}" = "preinst" ]; then
+	write_ota_status "running" "pre_update" "Application SWU preinstall started" 0
 	mount_partitions
 
 	# TODO: Execute custom code here. For example:
@@ -146,9 +226,14 @@ fi
 
 # Called just after installation process ends.
 if [ "${1}" = "postinst" ]; then
+	write_ota_status "success" "post_update" "Application SWU completed successfully" 0
 	schedule_reboot
 
 	# TODO: Execute custom code here. For example:
 	# - Clean directories.
 	# - Post-process files.
+fi
+
+if [ "${1}" = "postfailure" ]; then
+	write_ota_status "failed" "post_update" "Application SWU failed" 1 "swupdate"
 fi

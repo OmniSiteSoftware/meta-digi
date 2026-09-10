@@ -31,6 +31,85 @@ NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
 NM_BACKUP_DIR="${BACKUP_DIR}/NetworkManager/system-connections"
 TARGET_ROOTFS_MOUNT="${PERSISTENT_DATA_DIR}/swupdate-target-rootfs"
 TARGET_UBI_ROOTFS_VOLUMES="rootfs rootfs_a rootfs_b"
+OTA_STATUS_DIR="/etc/wings/fw-update"
+OTA_STATUS_FILE="${OTA_STATUS_DIR}/software-update-status.json"
+
+timestamp_utc() {
+	date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+read_ota_status_field() {
+	key="${1}"
+
+	[ -r "${OTA_STATUS_FILE}" ] || return 1
+	sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "${OTA_STATUS_FILE}" | head -n 1
+}
+
+write_ota_status() {
+	status="${1}"
+	phase="${2}"
+	message="${3}"
+	rc="${4:-0}"
+	error_stage="${5:-}"
+	ts="$(timestamp_utc)"
+	active="true"
+	component="system_firmware"
+	source="$(read_ota_status_field source || true)"
+	started_at="$(read_ota_status_field started_at || true)"
+	update_id="$(read_ota_status_field update_id || true)"
+	package_name="$(read_ota_status_field package_name || true)"
+	expected_version="$(read_ota_status_field expected_version || true)"
+	current_version="$(read_ota_status_field current_version || true)"
+	rc_json="${rc}"
+	error_stage_json="null"
+	completed_at_json="null"
+
+	case "${status}" in
+		success|failed|blocked|verify_failed|interrupted) active="false" ;;
+	esac
+	case "${status}" in
+		success|failed|blocked|verify_failed|interrupted) ;;
+		*) rc_json="null" ;;
+	esac
+	if [ -n "${error_stage}" ]; then
+		error_stage_json="\"$(json_escape "${error_stage}")\""
+	fi
+	if [ "${active}" = "false" ]; then
+		completed_at_json="\"${ts}\""
+	fi
+	[ -n "${source}" ] || source="drm"
+	[ -n "${started_at}" ] || started_at="${ts}"
+	[ -n "${update_id}" ] || update_id="${started_at}-${component}"
+
+	mkdir -p "${OTA_STATUS_DIR}" 2>/dev/null || true
+	{
+		printf '{\n'
+		printf '  "reportType": "ota_status",\n'
+		printf '  "active": %s,\n' "${active}"
+		printf '  "update_id": "%s",\n' "$(json_escape "${update_id}")"
+		printf '  "component": "%s",\n' "${component}"
+		printf '  "source": "%s",\n' "$(json_escape "${source}")"
+		printf '  "phase": "%s",\n' "$(json_escape "${phase}")"
+		printf '  "status": "%s",\n' "$(json_escape "${status}")"
+		printf '  "package_name": "%s",\n' "$(json_escape "${package_name}")"
+		printf '  "expected_version": "%s",\n' "$(json_escape "${expected_version}")"
+		printf '  "current_version": "%s",\n' "$(json_escape "${current_version}")"
+		printf '  "port": null,\n'
+		printf '  "return_code": %s,\n' "${rc_json}"
+		printf '  "error_stage": %s,\n' "${error_stage_json}"
+		printf '  "message": "%s",\n' "$(json_escape "${message}")"
+		printf '  "recovery_action": "Device should reboot into the updated A/B bank after SWUpdate completes",\n'
+		printf '  "reboot_required": true,\n'
+		printf '  "started_at": "%s",\n' "${started_at}"
+		printf '  "completed_at": %s,\n' "${completed_at_json}"
+		printf '  "timestamp": "%s"\n' "${ts}"
+		printf '}\n'
+	} > "${OTA_STATUS_FILE}.tmp" && mv "${OTA_STATUS_FILE}.tmp" "${OTA_STATUS_FILE}"
+}
 
 backup_wings_config_files() {
 	echo "Backing up persistent Wings configuration to ${BACKUP_DIR}"
@@ -230,6 +309,7 @@ restore_wings_config_files_to_ubi_rootfs() {
 
 # Called just before installation process starts.
 if [ "${1}" = "preinst" ]; then
+	write_ota_status "running" "pre_update" "Full image SWU preinstall started" 0
 	backup_wings_config_files
 
 	# TODO: Execute custom code here. For example:
@@ -241,8 +321,13 @@ fi
 if [ "${1}" = "postinst" ]; then
 	restore_wings_config_files
 	clear_refreshed_files_from_overlayfs_etc
+	write_ota_status "success" "post_update" "Full image SWU completed successfully" 0
 
 	# TODO: Execute custom code here. For example:
 	# - Clean files/directories.
 	# - Post-process files.
+fi
+
+if [ "${1}" = "postfailure" ]; then
+	write_ota_status "failed" "post_update" "Full image SWU failed" 1 "swupdate"
 fi
