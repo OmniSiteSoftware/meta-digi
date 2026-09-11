@@ -33,6 +33,7 @@ TARGET_ROOTFS_MOUNT="${PERSISTENT_DATA_DIR}/swupdate-target-rootfs"
 TARGET_UBI_ROOTFS_VOLUMES="rootfs rootfs_a rootfs_b"
 OTA_STATUS_DIR="/etc/wings/fw-update"
 OTA_STATUS_FILE="${OTA_STATUS_DIR}/software-update-status.json"
+OTA_IMAGE_EXPECTED_VERSION="@@DEY_BSP_VERSION@@"
 
 timestamp_utc() {
 	date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
@@ -49,6 +50,11 @@ read_ota_status_field() {
 	sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "${OTA_STATUS_FILE}" | head -n 1
 }
 
+read_installed_bsp_version() {
+	[ -r /etc/sw-versions ] || return 1
+	sed -n 's/^bsp[[:space:]]\+\([^[:space:]]\+\).*/\1/p' /etc/sw-versions | head -n 1
+}
+
 write_ota_status() {
 	status="${1}"
 	phase="${2}"
@@ -58,15 +64,29 @@ write_ota_status() {
 	ts="$(timestamp_utc)"
 	active="true"
 	component="system_firmware"
-	source="$(read_ota_status_field source || true)"
-	started_at="$(read_ota_status_field started_at || true)"
-	update_id="$(read_ota_status_field update_id || true)"
-	package_name="$(read_ota_status_field package_name || true)"
-	expected_version="$(read_ota_status_field expected_version || true)"
-	current_version="$(read_ota_status_field current_version || true)"
+	if [ "${OTA_STATUS_NEW_TRANSACTION:-}" = "1" ]; then
+		source="${WINGS_OTA_SOURCE:-DRM}"
+		started_at="${ts}"
+		update_id="${started_at}-${component}"
+		package_name="${WINGS_OTA_PACKAGE_NAME:-}"
+		expected_version="${WINGS_OTA_EXPECTED_VERSION:-${OTA_IMAGE_EXPECTED_VERSION}}"
+		current_version="$(read_installed_bsp_version || true)"
+	else
+		source="$(read_ota_status_field source || true)"
+		started_at="$(read_ota_status_field started_at || true)"
+		update_id="$(read_ota_status_field update_id || true)"
+		package_name="$(read_ota_status_field package_name || true)"
+		expected_version="$(read_ota_status_field expected_version || true)"
+		current_version="$(read_ota_status_field current_version || true)"
+	fi
+	if [ "${status}" != "running" ] || [ -z "${current_version}" ]; then
+		installed_version="$(read_installed_bsp_version || true)"
+		[ -n "${installed_version}" ] && current_version="${installed_version}"
+	fi
 	rc_json="${rc}"
 	error_stage_json="null"
 	completed_at_json="null"
+	reboot_stage="null"
 
 	case "${status}" in
 		success|failed|blocked|verify_failed|interrupted) active="false" ;;
@@ -81,7 +101,12 @@ write_ota_status() {
 	if [ "${active}" = "false" ]; then
 		completed_at_json="\"${ts}\""
 	fi
-	[ -n "${source}" ] || source="drm"
+	case "${phase}" in
+		post_update) reboot_stage="\"before_reboot\"" ;;
+		post_reboot) reboot_stage="\"after_reboot\"" ;;
+	esac
+	[ -n "${source}" ] || source="DRM"
+	[ "${source}" = "drm" ] && source="DRM"
 	[ -n "${started_at}" ] || started_at="${ts}"
 	[ -n "${update_id}" ] || update_id="${started_at}-${component}"
 
@@ -106,6 +131,7 @@ write_ota_status() {
 		printf '  "reboot_required": true,\n'
 		printf '  "started_at": "%s",\n' "${started_at}"
 		printf '  "completed_at": %s,\n' "${completed_at_json}"
+		printf '  "reboot_stage": %s,\n' "${reboot_stage}"
 		printf '  "timestamp": "%s"\n' "${ts}"
 		printf '}\n'
 	} > "${OTA_STATUS_FILE}.tmp" && mv "${OTA_STATUS_FILE}.tmp" "${OTA_STATUS_FILE}"
@@ -309,7 +335,11 @@ restore_wings_config_files_to_ubi_rootfs() {
 
 # Called just before installation process starts.
 if [ "${1}" = "preinst" ]; then
-	write_ota_status "running" "pre_update" "Full image SWU preinstall started" 0
+	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+		# A DRM invocation has no WingsApp transaction to seed the report. Start
+		# a fresh Yocto-owned transaction instead of reusing stale local fields.
+		OTA_STATUS_NEW_TRANSACTION=1 write_ota_status "running" "pre_update" "Full image SWU preinstall started" 0
+	fi
 	backup_wings_config_files
 
 	# TODO: Execute custom code here. For example:
@@ -321,7 +351,9 @@ fi
 if [ "${1}" = "postinst" ]; then
 	restore_wings_config_files
 	clear_refreshed_files_from_overlayfs_etc
-	write_ota_status "success" "post_update" "Full image SWU completed successfully" 0
+	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+		write_ota_status "success" "post_update" "Full image SWU completed successfully" 0
+	fi
 
 	# TODO: Execute custom code here. For example:
 	# - Clean files/directories.
@@ -329,5 +361,7 @@ if [ "${1}" = "postinst" ]; then
 fi
 
 if [ "${1}" = "postfailure" ]; then
-	write_ota_status "failed" "post_update" "Full image SWU failed" 1 "swupdate"
+	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+		write_ota_status "failed" "post_update" "Full image SWU failed" 1 "swupdate"
+	fi
 fi

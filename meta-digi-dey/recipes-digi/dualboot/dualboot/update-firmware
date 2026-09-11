@@ -309,4 +309,14 @@ elif [ ! -f "${UPDATE_FILE}" ]; then
 	exit
 fi
 
+# Make the exact SWU name available to the SWUpdate hooks.  DRM invokes this
+# wrapper with the downloaded file path, while the hooks otherwise have no
+# reliable way to identify the package that is being installed.
+WINGS_OTA_PACKAGE_NAME="$(basename "${UPDATE_FILE}")"
+export WINGS_OTA_PACKAGE_NAME
+if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+	WINGS_OTA_SOURCE="drm"
+	export WINGS_OTA_SOURCE
+fi
+
 update_device
