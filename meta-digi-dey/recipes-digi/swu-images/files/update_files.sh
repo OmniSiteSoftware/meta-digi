@@ -53,6 +53,10 @@ read_installed_bsp_version() {
 write_ota_status() {
 	status="${1}"
 	phase="${2}"
+	case "${phase}" in
+		before_reboot|post_update) phase="pre_update" ;;
+		post_reboot|after_reboot) phase="post_update" ;;
+	esac
 	message="${3}"
 	rc="${4:-0}"
 	error_stage="${5:-}"
@@ -74,6 +78,18 @@ write_ota_status() {
 		expected_version="$(read_ota_status_field expected_version || true)"
 		current_version="$(read_ota_status_field current_version || true)"
 	fi
+	existing_status="$(read_ota_status_field status || true)"
+	existing_phase="$(read_ota_status_field phase || true)"
+	existing_update_id="$(read_ota_status_field update_id || true)"
+	if [ "${status}" != "running" ] \
+		&& [ "${existing_status}" = "${status}" ] \
+		&& { [ "${existing_phase}" = "${phase}" ] || \
+			( [ "${phase}" = "pre_update" ] && { [ "${existing_phase}" = "before_reboot" ] || [ "${existing_phase}" = "post_update" ]; } ); } \
+		&& [ -n "${existing_update_id}" ] \
+		&& [ "${existing_update_id}" = "${update_id}" ]; then
+		echo "Preserving existing terminal OTA status for ${update_id}"
+		return 0
+	fi
 	if [ "${status}" != "running" ] || [ -z "${current_version}" ]; then
 		installed_version="$(read_installed_bsp_version || true)"
 		[ -n "${installed_version}" ] && current_version="${installed_version}"
@@ -82,10 +98,17 @@ write_ota_status() {
 	error_stage_json="null"
 	completed_at_json="null"
 	reboot_stage="null"
+	reboot_required_json="false"
+	recovery_action="Review status and retry if needed"
 
 	case "${status}" in
 		success|failed|blocked|verify_failed|interrupted) active="false" ;;
+		running) reboot_required_json="true" ;;
 	esac
+	[ "${status}" = "success" ] && {
+		reboot_required_json="true"
+		recovery_action="Device should reboot after SWUpdate completes"
+	}
 	case "${status}" in
 		success|failed|blocked|verify_failed|interrupted) ;;
 		*) rc_json="null" ;;
@@ -97,9 +120,15 @@ write_ota_status() {
 		completed_at_json="\"${ts}\""
 	fi
 	case "${phase}" in
-		post_update) reboot_stage="\"before_reboot\"" ;;
-		post_reboot) reboot_stage="\"after_reboot\"" ;;
+		before_reboot|post_update) phase="pre_update" ;;
+		post_reboot|after_reboot) phase="post_update" ;;
 	esac
+	if [ "${active}" = "false" ]; then
+		case "${phase}" in
+			pre_update) reboot_stage="\"before_reboot\"" ;;
+			post_update) reboot_stage="\"after_reboot\"" ;;
+		esac
+	fi
 	[ -n "${source}" ] || source="DRM"
 	[ "${source}" = "drm" ] && source="DRM"
 	[ -n "${started_at}" ] || started_at="${ts}"
@@ -122,8 +151,8 @@ write_ota_status() {
 		printf '  "return_code": %s,\n' "${rc_json}"
 		printf '  "error_stage": %s,\n' "${error_stage_json}"
 		printf '  "message": "%s",\n' "$(json_escape "${message}")"
-		printf '  "recovery_action": "Device should reboot after SWUpdate completes",\n'
-		printf '  "reboot_required": true,\n'
+		printf '  "recovery_action": "%s",\n' "${recovery_action}"
+		printf '  "reboot_required": %s,\n' "${reboot_required_json}"
 		printf '  "started_at": "%s",\n' "${started_at}"
 		printf '  "completed_at": %s,\n' "${completed_at_json}"
 		printf '  "reboot_stage": %s,\n' "${reboot_stage}"
@@ -269,6 +298,13 @@ fi
 
 if [ "${1}" = "postfailure" ]; then
 	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
-		write_ota_status "failed" "post_update" "Application SWU failed" 1 "swupdate"
+		previous_status="$(read_ota_status_field status || true)"
+		previous_phase="$(read_ota_status_field phase || true)"
+		if { [ "${previous_status}" = "success" ] || [ "${previous_status}" = "failed" ]; } \
+			&& { [ "${previous_phase}" = "pre_update" ] || [ "${previous_phase}" = "post_update" ] || [ "${previous_phase}" = "before_reboot" ]; }; then
+			echo "Preserving existing terminal application OTA status"
+		else
+			write_ota_status "failed" "post_update" "Application SWU failed" 1 "swupdate"
+		fi
 	fi
 fi
