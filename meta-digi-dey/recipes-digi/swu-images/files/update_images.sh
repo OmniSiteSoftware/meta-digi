@@ -381,7 +381,9 @@ if [ "${1}" = "postinst" ]; then
 	restore_wings_config_files
 	clear_refreshed_files_from_overlayfs_etc
 	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
-		write_ota_status "success" "post_update" "Full image SWU completed successfully" 0
+		# Persist the terminal result before reboot. WingsApp publishes the
+		# verified post_update result after the next boot.
+		write_ota_status "success" "pre_update" "Full image SWU completed successfully" 0
 	fi
 
 	# TODO: Execute custom code here. For example:
@@ -397,7 +399,7 @@ if [ "${1}" = "postfailure" ]; then
 			&& { [ "${previous_phase}" = "pre_update" ] || [ "${previous_phase}" = "post_update" ] || [ "${previous_phase}" = "before_reboot" ]; }; then
 			echo "Preserving existing terminal full-image OTA status"
 		else
-			write_ota_status "failed" "post_update" "Full image SWU failed" 1 "swupdate"
+			write_ota_status "failed" "pre_update" "Full image SWU failed" 1 "swupdate"
 		fi
 	fi
 fi

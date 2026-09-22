@@ -285,7 +285,9 @@ fi
 # Called just after installation process ends.
 if [ "${1}" = "postinst" ]; then
 	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
-		write_ota_status "success" "post_update" "Application SWU completed successfully" 0
+		# Persist the terminal result before reboot. WingsApp publishes the
+		# verified post_update result after the next boot.
+		write_ota_status "success" "pre_update" "Application SWU completed successfully" 0
 		# DRM-owned updates are not controlled by WingsApp, so the Yocto hook
 		# remains responsible for scheduling the reboot.
 		schedule_reboot
@@ -304,7 +306,7 @@ if [ "${1}" = "postfailure" ]; then
 			&& { [ "${previous_phase}" = "pre_update" ] || [ "${previous_phase}" = "post_update" ] || [ "${previous_phase}" = "before_reboot" ]; }; then
 			echo "Preserving existing terminal application OTA status"
 		else
-			write_ota_status "failed" "post_update" "Application SWU failed" 1 "swupdate"
+			write_ota_status "failed" "pre_update" "Application SWU failed" 1 "swupdate"
 		fi
 	fi
 fi
