@@ -31,6 +31,140 @@ NM_CONNECTIONS_DIR="/etc/NetworkManager/system-connections"
 NM_BACKUP_DIR="${BACKUP_DIR}/NetworkManager/system-connections"
 TARGET_ROOTFS_MOUNT="${PERSISTENT_DATA_DIR}/swupdate-target-rootfs"
 TARGET_UBI_ROOTFS_VOLUMES="rootfs rootfs_a rootfs_b"
+OTA_STATUS_DIR="/etc/wings/fw-update"
+OTA_STATUS_FILE="${OTA_STATUS_DIR}/software-update-status.json"
+OTA_IMAGE_EXPECTED_VERSION="@@DEY_BSP_VERSION@@"
+
+timestamp_utc() {
+	date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
+}
+
+json_escape() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+read_ota_status_field() {
+	key="${1}"
+
+	[ -r "${OTA_STATUS_FILE}" ] || return 1
+	sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "${OTA_STATUS_FILE}" | head -n 1
+}
+
+read_installed_bsp_version() {
+	[ -r /etc/sw-versions ] || return 1
+	sed -n 's/^bsp[[:space:]]\+\([^[:space:]]\+\).*/\1/p' /etc/sw-versions | head -n 1
+}
+
+write_ota_status() {
+	status="${1}"
+	phase="${2}"
+	case "${phase}" in
+		before_reboot|post_update) phase="pre_update" ;;
+		post_reboot|after_reboot) phase="post_update" ;;
+	esac
+	message="${3}"
+	rc="${4:-0}"
+	error_stage="${5:-}"
+	ts="$(timestamp_utc)"
+	active="true"
+	component="system_firmware"
+	if [ "${OTA_STATUS_NEW_TRANSACTION:-}" = "1" ]; then
+		source="${WINGS_OTA_SOURCE:-DRM}"
+		started_at="${ts}"
+		update_id="${started_at}-${component}"
+		package_name="${WINGS_OTA_PACKAGE_NAME:-}"
+		expected_version="${WINGS_OTA_EXPECTED_VERSION:-${OTA_IMAGE_EXPECTED_VERSION}}"
+		current_version="$(read_installed_bsp_version || true)"
+	else
+		source="$(read_ota_status_field source || true)"
+		started_at="$(read_ota_status_field started_at || true)"
+		update_id="$(read_ota_status_field update_id || true)"
+		package_name="$(read_ota_status_field package_name || true)"
+		expected_version="$(read_ota_status_field expected_version || true)"
+		current_version="$(read_ota_status_field current_version || true)"
+	fi
+	existing_status="$(read_ota_status_field status || true)"
+	existing_phase="$(read_ota_status_field phase || true)"
+	existing_update_id="$(read_ota_status_field update_id || true)"
+	if [ "${status}" != "running" ] \
+		&& [ "${existing_status}" = "${status}" ] \
+		&& { [ "${existing_phase}" = "${phase}" ] || \
+			( [ "${phase}" = "pre_update" ] && { [ "${existing_phase}" = "before_reboot" ] || [ "${existing_phase}" = "post_update" ]; } ); } \
+		&& [ -n "${existing_update_id}" ] \
+		&& [ "${existing_update_id}" = "${update_id}" ]; then
+		echo "Preserving existing terminal OTA status for ${update_id}"
+		return 0
+	fi
+	if [ "${status}" != "running" ] || [ -z "${current_version}" ]; then
+		installed_version="$(read_installed_bsp_version || true)"
+		[ -n "${installed_version}" ] && current_version="${installed_version}"
+	fi
+	rc_json="${rc}"
+	error_stage_json="null"
+	completed_at_json="null"
+	reboot_stage="null"
+	reboot_required_json="false"
+	recovery_action="Review status and retry if needed"
+
+	case "${status}" in
+		success|failed|blocked|verify_failed|interrupted) active="false" ;;
+		running) reboot_required_json="true" ;;
+	esac
+	[ "${status}" = "success" ] && {
+		reboot_required_json="true"
+		recovery_action="Device should reboot into the updated A/B bank after SWUpdate completes"
+	}
+	case "${status}" in
+		success|failed|blocked|verify_failed|interrupted) ;;
+		*) rc_json="null" ;;
+	esac
+	if [ -n "${error_stage}" ]; then
+		error_stage_json="\"$(json_escape "${error_stage}")\""
+	fi
+	if [ "${active}" = "false" ]; then
+		completed_at_json="\"${ts}\""
+	fi
+	case "${phase}" in
+		before_reboot|post_update) phase="pre_update" ;;
+		post_reboot|after_reboot) phase="post_update" ;;
+	esac
+	if [ "${active}" = "false" ]; then
+		case "${phase}" in
+			pre_update) reboot_stage="\"before_reboot\"" ;;
+			post_update) reboot_stage="\"after_reboot\"" ;;
+		esac
+	fi
+	[ -n "${source}" ] || source="DRM"
+	[ "${source}" = "drm" ] && source="DRM"
+	[ -n "${started_at}" ] || started_at="${ts}"
+	[ -n "${update_id}" ] || update_id="${started_at}-${component}"
+
+	mkdir -p "${OTA_STATUS_DIR}" 2>/dev/null || true
+	{
+		printf '{\n'
+		printf '  "reportType": "ota_status",\n'
+		printf '  "active": %s,\n' "${active}"
+		printf '  "update_id": "%s",\n' "$(json_escape "${update_id}")"
+		printf '  "component": "%s",\n' "${component}"
+		printf '  "source": "%s",\n' "$(json_escape "${source}")"
+		printf '  "phase": "%s",\n' "$(json_escape "${phase}")"
+		printf '  "status": "%s",\n' "$(json_escape "${status}")"
+		printf '  "package_name": "%s",\n' "$(json_escape "${package_name}")"
+		printf '  "expected_version": "%s",\n' "$(json_escape "${expected_version}")"
+		printf '  "current_version": "%s",\n' "$(json_escape "${current_version}")"
+		printf '  "port": null,\n'
+		printf '  "return_code": %s,\n' "${rc_json}"
+		printf '  "error_stage": %s,\n' "${error_stage_json}"
+		printf '  "message": "%s",\n' "$(json_escape "${message}")"
+		printf '  "recovery_action": "%s",\n' "${recovery_action}"
+		printf '  "reboot_required": %s,\n' "${reboot_required_json}"
+		printf '  "started_at": "%s",\n' "${started_at}"
+		printf '  "completed_at": %s,\n' "${completed_at_json}"
+		printf '  "reboot_stage": %s,\n' "${reboot_stage}"
+		printf '  "timestamp": "%s"\n' "${ts}"
+		printf '}\n'
+	} > "${OTA_STATUS_FILE}.tmp" && mv "${OTA_STATUS_FILE}.tmp" "${OTA_STATUS_FILE}"
+}
 
 backup_wings_config_files() {
 	echo "Backing up persistent Wings configuration to ${BACKUP_DIR}"
@@ -230,6 +364,11 @@ restore_wings_config_files_to_ubi_rootfs() {
 
 # Called just before installation process starts.
 if [ "${1}" = "preinst" ]; then
+	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+		# A DRM invocation has no WingsApp transaction to seed the report. Start
+		# a fresh Yocto-owned transaction instead of reusing stale local fields.
+		OTA_STATUS_NEW_TRANSACTION=1 write_ota_status "running" "pre_update" "Full image SWU preinstall started" 0
+	fi
 	backup_wings_config_files
 
 	# TODO: Execute custom code here. For example:
@@ -241,8 +380,26 @@ fi
 if [ "${1}" = "postinst" ]; then
 	restore_wings_config_files
 	clear_refreshed_files_from_overlayfs_etc
+	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+		# Persist the terminal result before reboot. WingsApp publishes the
+		# verified post_update result after the next boot.
+		write_ota_status "success" "pre_update" "Full image SWU completed successfully" 0
+	fi
 
 	# TODO: Execute custom code here. For example:
 	# - Clean files/directories.
 	# - Post-process files.
+fi
+
+if [ "${1}" = "postfailure" ]; then
+	if [ "${WINGS_OTA_STATUS_OWNER:-}" != "app" ]; then
+		previous_status="$(read_ota_status_field status || true)"
+		previous_phase="$(read_ota_status_field phase || true)"
+		if { [ "${previous_status}" = "success" ] || [ "${previous_status}" = "failed" ]; } \
+			&& { [ "${previous_phase}" = "pre_update" ] || [ "${previous_phase}" = "post_update" ] || [ "${previous_phase}" = "before_reboot" ]; }; then
+			echo "Preserving existing terminal full-image OTA status"
+		else
+			write_ota_status "failed" "pre_update" "Full image SWU failed" 1 "swupdate"
+		fi
+	fi
 fi

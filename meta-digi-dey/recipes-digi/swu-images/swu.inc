@@ -83,6 +83,9 @@ python do_swuimage:prepend() {
         update_script_data = update_script_data.replace(
             "@@SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT@@",
             d.getVar('SWUPDATE_OVERLAYFS_ETC_MOUNT_POINT') or "/mnt/data")
+        update_script_data = update_script_data.replace(
+            "@@DEY_BSP_VERSION@@",
+            d.getVar('DEY_BSP_VERSION') or d.getVar('DEY_FIRMWARE_VERSION') or "")
         with open(update_script_deploy, "w") as f:
             f.write(update_script_data)
 
