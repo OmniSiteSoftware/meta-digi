@@ -17,12 +17,19 @@ readonly LOG_FILE_PREFIX="${LOG_FILE_PREFIX:-application_log}"
 readonly SYS_LOG_SOURCE_FILE="${LOG_SYS_SOURCE_FILE:-/var/log/messages}"
 readonly SYS_LOG_FILE_PREFIX="${LOG_SYS_FILE_PREFIX:-syslog}"
 readonly SYS_LOG_OFFSET_FILE="${LOG_SYS_OFFSET_FILE:-/run/wings-syslog.offset}"
-readonly LOG_MANAGER_VERSION="${LOG_MANAGER_VERSION:-1.0.0}"
+readonly APP_PID_FILE="${LOG_APP_PID_FILE:-/run/wings_app.pid}"
+readonly LOG_MANAGER_VERSION="${LOG_MANAGER_VERSION:-2.0.0}"
 readonly MAX_RAM_LOG_BYTES="${LOG_MAX_RAM_BYTES:-5242880}"
 readonly FLUSH_INTERVAL_SECS="${LOG_FLUSH_INTERVAL_SECS:-120}"
 readonly STORAGE_USAGE_LIMIT_PERCENT="${LOG_STORAGE_USAGE_LIMIT_PERCENT:-90}"
 readonly RETENTION_DAYS="${LOG_RETENTION_DAYS:-7}"
 readonly POLL_INTERVAL_SECS="${LOG_MANAGER_POLL_INTERVAL_SECS:-5}"
+readonly RAM_POLL_INTERVAL_SECS="${LOG_RAM_POLL_INTERVAL_SECS:-1}"
+readonly STORAGE_TIMEOUT_SECS="${LOG_STORAGE_TIMEOUT_SECS:-30}"
+readonly WORKER_RETRY_SECS="${LOG_WORKER_RETRY_SECS:-30}"
+readonly STORAGE_PROGRESS_FILE="${LOG_STORAGE_PROGRESS_FILE:-}"
+readonly SYS_PROGRESS_FILE="${LOG_SYS_PROGRESS_FILE:-}"
+readonly RUNTIME_DIR="${LOG_MANAGER_RUNTIME_DIR:-}"
 readonly DEFAULT_TARGET="${LOG_DEFAULT_TARGET:-SD}"
 
 manager_log() {
@@ -285,24 +292,30 @@ ensure_target_files() {
 
     mkdir -p "$ensure_target_dir" || return 1
     mkdir -p "$ensure_marker_dir" || return 1
-    : >> "$ensure_target_file" || return 1
+    true >> "$ensure_target_file" || return 1
     printf '[%s] hello i am handshaked\n' "$(timestamp)" >> "$ensure_marker_file"
 }
 
 ensure_sys_log_source_file() {
+    if [ -e "$SYS_LOG_SOURCE_FILE" ] && [ ! -f "$SYS_LOG_SOURCE_FILE" ]; then
+        return 1
+    fi
     ensure_sys_log_dir="$(dirname "$SYS_LOG_SOURCE_FILE")"
     mkdir -p "$ensure_sys_log_dir" || return 1
-    : >> "$SYS_LOG_SOURCE_FILE" || return 1
+    # Unlike the special builtin ':', true lets ash return a redirection error
+    # to the caller instead of terminating the manager on a filesystem failure.
+    true >> "$SYS_LOG_SOURCE_FILE" || return 1
 }
 
 ensure_sys_ram_log_file() {
     mkdir -p "$RAM_LOG_DIR" || return 1
-    : >> "$SYS_RAM_LOG_FILE" || return 1
+    true >> "$SYS_RAM_LOG_FILE" || return 1
 }
 
 read_sys_log_offset() {
     if [ -f "$SYS_LOG_OFFSET_FILE" ]; then
-        offset_value="$(cat "$SYS_LOG_OFFSET_FILE" 2>/dev/null || printf '0')"
+        offset_value=""
+        read -r offset_value < "$SYS_LOG_OFFSET_FILE" || offset_value=0
         case "$offset_value" in
             ''|*[!0-9]*)
                 printf '0\n'
@@ -320,48 +333,90 @@ write_sys_log_offset() {
     offset_value="$1"
     offset_dir="$(dirname "$SYS_LOG_OFFSET_FILE")"
     mkdir -p "$offset_dir" 2>/dev/null || true
-    printf '%s\n' "$offset_value" > "$SYS_LOG_OFFSET_FILE"
+    offset_tmp="$RUNTIME_DIR/source.offset.tmp"
+    printf '%s\n%s\n' "$offset_value" "$2" > "$offset_tmp" || return 1
+    mv -f "$offset_tmp" "$SYS_LOG_OFFSET_FILE"
 }
 
 ensure_ram_log_file() {
     mkdir -p "$RAM_LOG_DIR" || return 1
-    : >> "$RAM_LOG_FILE" || return 1
+    true >> "$RAM_LOG_FILE" || return 1
 }
 
 ram_log_size_bytes() {
     if [ -f "$RAM_LOG_FILE" ]; then
-        wc -c < "$RAM_LOG_FILE"
+        stat -L -c '%s' "$RAM_LOG_FILE"
     else
         printf '0\n'
     fi
 }
 
 trim_ram_log_to_limit() {
-    trim_current_size="$(ram_log_size_bytes)"
-
-    [ "$trim_current_size" -gt "$MAX_RAM_LOG_BYTES" ] || return 0
-
-    trim_tmp_file="${RAM_LOG_FILE}.tmp"
-    tail -c "$MAX_RAM_LOG_BYTES" "$RAM_LOG_FILE" > "$trim_tmp_file" || return 1
-    mv "$trim_tmp_file" "$RAM_LOG_FILE"
+    if [ "$guard_runtime_ready" = 1 ]; then
+        trim_log_to_limit "$RAM_LOG_FILE" "$guard_runtime_dir/app.generation"
+    else
+        trim_log_to_limit "$RAM_LOG_FILE" ""
+    fi
 }
 
 sys_ram_log_size_bytes() {
     if [ -f "$SYS_RAM_LOG_FILE" ]; then
-        wc -c < "$SYS_RAM_LOG_FILE"
+        stat -L -c '%s' "$SYS_RAM_LOG_FILE"
     else
         printf '0\n'
     fi
 }
 
 trim_sys_ram_log_to_limit() {
-    trim_current_size="$(sys_ram_log_size_bytes)"
+    if [ "$guard_runtime_ready" = 1 ]; then
+        trim_log_to_limit "$SYS_RAM_LOG_FILE" "$guard_runtime_dir/sys.generation"
+    else
+        trim_log_to_limit "$SYS_RAM_LOG_FILE" ""
+    fi
+}
 
-    [ "$trim_current_size" -gt "$MAX_RAM_LOG_BYTES" ] || return 0
+read_generation() {
+    generation_value=""
+    read -r generation_value < "$1" || return 1
+    case "$generation_value" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\n' "$generation_value"
+}
 
-    trim_tmp_file="${SYS_RAM_LOG_FILE}.tmp"
-    tail -c "$MAX_RAM_LOG_BYTES" "$SYS_RAM_LOG_FILE" > "$trim_tmp_file" || return 1
-    mv "$trim_tmp_file" "$SYS_RAM_LOG_FILE"
+trim_log_to_limit() {
+    trim_file="$1"
+    trim_generation_file="$2"
+    trim_current_size="$(stat -L -c '%s' "$trim_file")" || return 1
+    [ "$trim_current_size" -ge "$MAX_RAM_LOG_BYTES" ] || return 0
+    # Before runtime setup succeeds there are no workers or flush cursors.
+    # Reclaim RAM directly, without depending on /run being writable.
+    if [ -z "$trim_generation_file" ]; then
+        true > "$trim_file"
+        return "$?"
+    fi
+    trim_result=0
+    trim_generation="$(read_generation "$trim_generation_file")" || {
+        trim_generation=0
+        trim_result=1
+    }
+    # Recover a generation left odd by an earlier failed clear notification.
+    trim_generation=$((trim_generation + trim_generation % 2))
+
+    # Only the supervisor clears RAM buffers. Odd generations mean a clear is
+    # in progress; even generations identify a stable buffer for flush cursors.
+    # IPC failure must never prevent RAM reclamation. Losing flush cursor
+    # metadata is preferable to leaving a full live log growing indefinitely.
+    if printf '%s\n' "$((trim_generation + 1))" > "$trim_generation_file.tmp"; then
+        mv -f "$trim_generation_file.tmp" "$trim_generation_file" || trim_result=1
+    else
+        trim_result=1
+    fi
+    true > "$trim_file" || trim_result=1
+    if printf '%s\n' "$((trim_generation + 2))" > "$trim_generation_file.tmp"; then
+        mv -f "$trim_generation_file.tmp" "$trim_generation_file" || trim_result=1
+    else
+        trim_result=1
+    fi
+    return "$trim_result"
 }
 
 sync_sys_log_source_to_ram() {
@@ -369,8 +424,16 @@ sync_sys_log_source_to_ram() {
 
     ensure_sys_log_source_file || return 1
     ensure_sys_ram_log_file || return 1
+    [ -f "$SYS_LOG_SOURCE_FILE" ] || return 1
 
-    sync_current_size="$(wc -c < "$SYS_LOG_SOURCE_FILE" 2>/dev/null || printf '0\n')"
+    sync_source_metadata="$(stat -L -c '%d:%i %s' "$SYS_LOG_SOURCE_FILE" 2>/dev/null)" || return 1
+    sync_source_identity="${sync_source_metadata% *}"
+    sync_current_size="${sync_source_metadata##* }"
+    if [ "$sync_source_identity" != "$source_identity" ]; then
+        # A newly created messages file is new input even when it is the same
+        # size as (or larger than) the last file read before syslog rotation.
+        sync_current_offset=0
+    fi
     case "$sync_current_size" in
         ''|*[!0-9]*)
             sync_current_size=0
@@ -388,13 +451,40 @@ sync_sys_log_source_to_ram() {
 
     [ "$sync_current_size" -gt "$sync_current_offset" ] || return 0
 
-    if [ "$sync_current_offset" -eq 0 ]; then
-        cat "$SYS_LOG_SOURCE_FILE" >> "$SYS_RAM_LOG_FILE" || return 1
-    else
-        tail -c "+$((sync_current_offset + 1))" "$SYS_LOG_SOURCE_FILE" >> "$SYS_RAM_LOG_FILE" || return 1
+    # Keep only the newest bounded input when a large backlog has accumulated.
+    # Never append an unbounded source and hope a later trim can reclaim it.
+    sync_ram_size="$(sys_ram_log_size_bytes)"
+    sync_budget=$((MAX_RAM_LOG_BYTES - sync_ram_size))
+    [ "$sync_budget" -gt 0 ] || sync_budget=0
+    sync_copy_bytes=$((sync_current_size - sync_current_offset))
+    if [ "$sync_copy_bytes" -gt "$sync_budget" ]; then
+        sync_copy_bytes="$sync_budget"
+        sync_current_offset=$((sync_current_size - sync_copy_bytes))
     fi
 
-    write_sys_log_offset "$sync_current_size"
+    # Prefer dropping a failed batch over appending it repeatedly on retries.
+    write_sys_log_offset "$sync_current_size" "$sync_source_identity" || return 1
+    source_identity="$sync_source_identity"
+    [ "$sync_copy_bytes" -gt 0 ] || return 0
+    copy_log_bytes "$SYS_LOG_SOURCE_FILE" "$SYS_RAM_LOG_FILE" "$sync_current_offset" "$sync_copy_bytes"
+}
+
+copy_log_bytes() {
+    copy_source="$1"
+    copy_destination="$2"
+    copy_offset="$3"
+    copy_bytes="$4"
+    copy_blocks=$((copy_bytes / 4096))
+    copy_remainder=$((copy_bytes % 4096))
+
+    # BusyBox supports skip_bytes. Use small blocks, not a second RAM-sized
+    # snapshot or a potentially endless cat of a file that is still growing.
+    if [ "$copy_blocks" -gt 0 ]; then
+        dd if="$copy_source" bs=4096 iflag=skip_bytes skip="$copy_offset" count="$copy_blocks" 2>/dev/null >> "$copy_destination" || return 1
+    fi
+    if [ "$copy_remainder" -gt 0 ]; then
+        dd if="$copy_source" bs=1 skip="$((copy_offset + copy_blocks * 4096))" count="$copy_remainder" 2>/dev/null >> "$copy_destination" || return 1
+    fi
     return 0
 }
 
@@ -417,53 +507,103 @@ cleanup_old_sys_logs() {
 }
 
 flush_ram_log_to_target() {
-    flush_target_dir="$1"
-    flush_target_file="$2"
-    flush_usage_percent=0
-
-    [ -s "$RAM_LOG_FILE" ] || return 0
-
-    flush_usage_percent="$(target_storage_usage_percent "$flush_target_dir" 2>/dev/null || printf '0\n')"
-    case "$flush_usage_percent" in
-        ''|*[!0-9]*)
-            flush_usage_percent=0
-            ;;
-    esac
-
-    if [ "$flush_usage_percent" -ge "$STORAGE_USAGE_LIMIT_PERCENT" ]; then
-        return 2
-    fi
-
-    mkdir -p "$flush_target_dir" || return 1
-    cat "$RAM_LOG_FILE" >> "$flush_target_file" || return 1
-    : > "$RAM_LOG_FILE" || return 1
-    cleanup_old_logs "$flush_target_dir"
-    return 0
+    flush_buffer_to_target APP "$RAM_LOG_FILE" "$RUNTIME_DIR/app.generation" "$1" "$2"
 }
 
 flush_sys_log_to_target() {
-    flush_target_dir="$1"
-    flush_target_file="$2"
-    flush_usage_percent=0
+    flush_buffer_to_target SYS "$SYS_RAM_LOG_FILE" "$RUNTIME_DIR/sys.generation" "$1" "$2"
+}
 
-    ensure_sys_ram_log_file || return 1
-    [ -s "$SYS_RAM_LOG_FILE" ] || return 0
+read_process_identity() {
+    process_pid="$1"
+    case "$process_pid" in ''|*[!0-9]*) printf '%s\n' '-'; return ;; esac
+    if ! read -r process_stat < "/proc/$process_pid/stat"; then
+        printf '%s\n' '-'
+        return
+    fi
+    # Strip PID/comm (which can contain spaces). Start time is field 20 of
+    # the remainder, distinguishing a restarted process even if its PID recurs.
+    process_fields="${process_stat##*) }"
+    set -- $process_fields
+    if [ "$#" -lt 20 ]; then
+        printf '%s\n' '-'
+        return
+    fi
+    printf '%s:%s\n' "$process_pid" "${20}"
+}
 
-    flush_usage_percent="$(target_storage_usage_percent "$flush_target_dir" 2>/dev/null || printf '0\n')"
-    case "$flush_usage_percent" in
-        ''|*[!0-9]*)
-            flush_usage_percent=0
+read_application_identity() {
+    application_pid=""
+    if [ ! -f "$APP_PID_FILE" ] || ! read -r application_pid < "$APP_PID_FILE"; then
+        printf '%s\n' '-'
+        return
+    fi
+    read_process_identity "$application_pid"
+}
+
+flush_buffer_to_target() {
+    flush_did_copy=0
+    flush_kind="$1"
+    flush_source="$2"
+    flush_generation_file="$3"
+    flush_target_dir="$4"
+    flush_target_file="$5"
+    [ -s "$flush_source" ] || return 0
+    if [ "$flush_kind" = APP ]; then
+        flush_app_identity="$(read_application_identity)"
+    fi
+    flush_generation="$(read_generation "$flush_generation_file")" || return 1
+    [ $((flush_generation % 2)) -eq 0 ] || return 1
+    flush_snapshot_size="$(stat -L -c '%s' "$flush_source")" || return 1
+    [ "$flush_snapshot_size" -le "$MAX_RAM_LOG_BYTES" ] || flush_snapshot_size="$MAX_RAM_LOG_BYTES"
+    case "$flush_kind" in
+        APP)
+            flush_offset="$app_flush_offset"
+            if [ "$flush_app_identity" != "$app_flush_identity" ]; then
+                flush_offset=0
+            fi
+            flush_previous_generation="$app_flush_generation"
+            cleanup_old_logs "$flush_target_dir"
+            ;;
+        SYS)
+            flush_offset="$sys_flush_offset"
+            flush_previous_generation="$sys_flush_generation"
+            cleanup_old_sys_logs "$flush_target_dir"
             ;;
     esac
-
-    if [ "$flush_usage_percent" -ge "$STORAGE_USAGE_LIMIT_PERCENT" ]; then
-        return 2
+    if [ "$flush_generation" != "$flush_previous_generation" ] ||
+       [ "$flush_snapshot_size" -lt "$flush_offset" ]; then
+        flush_offset=0
+    fi
+    [ "$flush_snapshot_size" -gt "$flush_offset" ] || return 0
+    flush_usage_percent="$(target_storage_usage_percent "$flush_target_dir" 2>/dev/null)" || return 1
+    case "$flush_usage_percent" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$flush_usage_percent" -lt "$STORAGE_USAGE_LIMIT_PERCENT" ] || return 2
+    mkdir -p "$flush_target_dir" || return 1
+    flush_copy_bytes=$((flush_snapshot_size - flush_offset))
+    copy_log_bytes "$flush_source" "$flush_target_file" "$flush_offset" "$flush_copy_bytes" || return 1
+    flush_after_generation="$(read_generation "$flush_generation_file")" || return 1
+    if [ "$flush_kind" = APP ] &&
+       [ "$(read_application_identity)" != "$flush_app_identity" ]; then
+        return 1
     fi
 
-    mkdir -p "$flush_target_dir" || return 1
-    cat "$SYS_RAM_LOG_FILE" >> "$flush_target_file" || return 1
-    : > "$SYS_RAM_LOG_FILE" || return 1
-    cleanup_old_sys_logs "$flush_target_dir"
+    # Never clear a live buffer after copying a snapshot: the application or
+    # source worker may already have appended new logs. Save a cursor instead.
+    # A threshold clear may discard a batch during copying; retry the new
+    # generation from zero, without erasing any of its newly arrived data.
+    if [ "$flush_after_generation" != "$flush_generation" ]; then
+        return 1
+    fi
+    case "$flush_kind" in
+        APP)
+            app_flush_offset="$flush_snapshot_size"
+            app_flush_generation="$flush_generation"
+            app_flush_identity="$flush_app_identity"
+            ;;
+        SYS) sys_flush_offset="$flush_snapshot_size"; sys_flush_generation="$flush_generation" ;;
+    esac
+    flush_did_copy=1
     return 0
 }
 
@@ -531,12 +671,12 @@ evaluate_target_status() {
     return 0
 }
 
-monitor_cleanup() {
-    write_status "STOPPED" "NONE" "-" "-" "-" "service-stopped" "$RAM_LOG_FILE" "-" "-" "0" "0" "0" "-" "-" "0" "0"
-    exit 0
-}
-
 monitor_loop() {
+    app_flush_offset=0
+    app_flush_generation=""
+    app_flush_identity=""
+    sys_flush_offset=0
+    sys_flush_generation=""
     last_target=""
     last_state=""
     last_reason=""
@@ -544,6 +684,7 @@ monitor_loop() {
     last_target_file=""
     last_marker_key=""
     marker_status="IDLE"
+    marker_retry_epoch=0
     last_flush_epoch="$(date '+%s')"
     last_sys_flush_epoch="$(date '+%s')"
     last_log_write_at="-"
@@ -559,12 +700,15 @@ monitor_loop() {
     last_connected_mount_key=""
     cleanup_pending=0
 
-    trap monitor_cleanup INT TERM
+    # The supervisor owns public status and shutdown. This worker can be
+    # discarded without making RAM maintenance wait for removable storage.
+    trap 'exit 0' INT TERM
 
     manager_log "starting log manager"
     write_status "STARTING" "$(normalize_target "$(read_target)")" "-" "-" "-" "service-start" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "0" "$last_log_write_epoch" "$last_flush_epoch_value" "-" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "0"
 
     while true; do
+        printf '%s\n' "$(monotonic_seconds)" > "$STORAGE_PROGRESS_FILE"
         now_epoch="$(date '+%s')"
         logging_enabled="$(read_logging_enabled)"
         target_raw="$(read_target)"
@@ -585,42 +729,6 @@ monitor_loop() {
             fallback_target=""
             fallback_device=""
             last_requested_key="$requested_key"
-        fi
-
-        if ! ensure_ram_log_file; then
-            write_status "WAITING" "$target" "$target_device" "-" "-" "ram-log-unavailable" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
-            sleep "$POLL_INTERVAL_SECS"
-            continue
-        fi
-
-        if ! ensure_sys_ram_log_file; then
-            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-ram-log-unavailable" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
-            sleep "$POLL_INTERVAL_SECS"
-            continue
-        fi
-
-        if ! ensure_sys_log_source_file; then
-            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-log-unavailable" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
-            sleep "$POLL_INTERVAL_SECS"
-            continue
-        fi
-
-        if ! trim_ram_log_to_limit; then
-            write_status "WAITING" "$target" "$target_device" "-" "-" "ram-log-trim-failed" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
-            sleep "$POLL_INTERVAL_SECS"
-            continue
-        fi
-
-        if ! sync_sys_log_source_to_ram; then
-            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-log-sync-failed" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
-            sleep "$POLL_INTERVAL_SECS"
-            continue
-        fi
-
-        if ! trim_sys_ram_log_to_limit; then
-            write_status "WAITING" "$target" "$target_device" "-" "-" "sys-ram-log-trim-failed" "$RAM_LOG_FILE" "$last_log_write_at" "$last_flush_at" "${ram_log_size:-0}" "$last_log_write_epoch" "$last_flush_epoch_value" "$sys_target_file" "$last_sys_flush_at" "$last_sys_flush_epoch_value" "${sys_log_size:-0}"
-            sleep "$POLL_INTERVAL_SECS"
-            continue
         fi
 
         ram_log_size="$(ram_log_size_bytes)"
@@ -763,7 +871,12 @@ monitor_loop() {
                 cleanup_pending="0"
             fi
 
+            if [ "$marker_status" = "FAILED" ] &&
+               [ "$now_epoch" -ge "$marker_retry_epoch" ]; then
+                marker_status="IDLE"
+            fi
             if [ "$marker_status" = "IDLE" ]; then
+                marker_retry_epoch=$((now_epoch + WORKER_RETRY_SECS))
                 if ensure_target_files "$target_dir" "$target_file"; then
                     if [ "$sys_target_dir" != "-" ]; then
                         mkdir -p "$sys_target_dir" || {
@@ -774,7 +887,7 @@ monitor_loop() {
                             sleep "$POLL_INTERVAL_SECS"
                             continue
                         }
-                        : >> "$sys_target_file" || {
+                        true >> "$sys_target_file" || {
                             marker_status="FAILED"
                             state="WAITING"
                             reason="target-io-error"
@@ -801,15 +914,27 @@ monitor_loop() {
                 reason="target-io-error"
             fi
 
+            # A full card may contain expired syslogs as well as application
+            # logs. Reclaim both before an app flush can put us into WAITING.
+            if [ "$state" = "ACTIVE" ] &&
+               [ $((now_epoch - last_flush_epoch)) -ge "$FLUSH_INTERVAL_SECS" ]; then
+                cleanup_old_logs "$target_dir"
+                if [ "$sys_target_dir" != "-" ]; then
+                    cleanup_old_sys_logs "$sys_target_dir"
+                fi
+            fi
+
             if [ "$state" = "ACTIVE" ] && [ "$ram_log_size" -gt 0 ]; then
                 if [ "$ram_log_size" -ge "$MAX_RAM_LOG_BYTES" ] ||
                    [ $((now_epoch - last_flush_epoch)) -ge "$FLUSH_INTERVAL_SECS" ]; then
                     if flush_ram_log_to_target "$target_dir" "$target_file"; then
                         last_flush_epoch="$now_epoch"
-                        last_log_write_at="$(timestamp)"
-                        last_log_write_epoch="$now_epoch"
-                        last_flush_at="$(timestamp)"
-                        last_flush_epoch_value="$now_epoch"
+                        if [ "$flush_did_copy" = "1" ]; then
+                            last_log_write_at="$(timestamp)"
+                            last_log_write_epoch="$now_epoch"
+                            last_flush_at="$(timestamp)"
+                            last_flush_epoch_value="$now_epoch"
+                        fi
                         reason="target-ready"
                     else
                         flush_result="$?"
@@ -829,8 +954,10 @@ monitor_loop() {
                [ $((now_epoch - last_sys_flush_epoch)) -ge "$FLUSH_INTERVAL_SECS" ]; then
                 if flush_sys_log_to_target "$sys_target_dir" "$sys_target_file"; then
                     last_sys_flush_epoch="$now_epoch"
-                    last_sys_flush_at="$(timestamp)"
-                    last_sys_flush_epoch_value="$now_epoch"
+                    if [ "$flush_did_copy" = "1" ]; then
+                        last_sys_flush_at="$(timestamp)"
+                        last_sys_flush_epoch_value="$now_epoch"
+                    fi
                     sys_log_size="$(sys_ram_log_size_bytes)"
                     reason="target-ready"
                 else
@@ -863,4 +990,350 @@ monitor_loop() {
     done
 }
 
-monitor_loop
+monotonic_seconds() {
+    read -r monotonic_uptime monotonic_idle < /proc/uptime
+    printf '%s\n' "${monotonic_uptime%%.*}"
+}
+
+stop_storage_worker() {
+    # setsid gives the worker and its I/O commands a private process group.
+    # Do not wait: a device in uninterruptible kernel I/O may not exit yet.
+    if [ -n "${guard_worker_pid:-}" ]; then
+        stop_owned_worker "$guard_worker_pid" "$guard_worker_identity"
+    fi
+    guard_worker_pid=""
+    guard_worker_identity=""
+}
+
+stop_source_worker() {
+    if [ -n "${guard_source_pid:-}" ]; then
+        stop_owned_worker "$guard_source_pid" "$guard_source_identity"
+    fi
+    guard_source_pid=""
+    guard_source_identity=""
+}
+
+worker_is_owned() {
+    owned_pid="$1"
+    owned_identity="$2"
+    [ -n "$owned_identity" ] && [ "$owned_identity" != '-' ] || return 1
+    read -r owned_stat 2>/dev/null < "/proc/$owned_pid/stat" || return 1
+    owned_fields="${owned_stat##*) }"
+    set -- $owned_fields
+    [ "$#" -ge 20 ] || return 1
+    [ "$2" = "$$" ] && [ "$owned_pid:${20}" = "$owned_identity" ] || return 1
+    owned_group="$3"
+    owned_session="$4"
+}
+
+stop_owned_worker() {
+    # Never signal an expired numeric PID. Check parent and process start time
+    # immediately before signaling, and never send a second signal after kill.
+    worker_is_owned "$1" "$2" || return 0
+    if [ "$owned_group" = "$owned_pid" ] && [ "$owned_session" = "$owned_pid" ]; then
+        kill -KILL "-$owned_pid" 2>/dev/null || true
+    else
+        # setsid may not yet have run during very early supervisor shutdown.
+        kill -KILL "$owned_pid" 2>/dev/null || true
+    fi
+}
+
+guard_cleanup() {
+    trap - EXIT
+    trap '' INT TERM HUP
+    stop_storage_worker
+    stop_source_worker
+    if [ -n "${guard_runtime_dir:-}" ]; then
+        # This private mktemp directory contains only this manager's IPC files.
+        rm -f "$guard_runtime_dir"/* 2>/dev/null || true
+        rmdir "$guard_runtime_dir" 2>/dev/null || true
+    fi
+    write_status "STOPPED" "NONE" "-" "-" "-" "service-stopped" "$RAM_LOG_FILE" "-" "-" "0" "0" "0" "-" "-" "0" "0" || true
+    rm -f "${STATUS_FILE}.tmp.$$" 2>/dev/null || true
+}
+
+source_loop() {
+    source_identity=""
+    # The first line remains a byte offset for compatibility with older state.
+    # Restore identity too, avoiding replay of the source on manager restarts.
+    if [ -f "$SYS_LOG_OFFSET_FILE" ]; then
+        {
+            read -r source_saved_offset || true
+            read -r source_identity || true
+        } < "$SYS_LOG_OFFSET_FILE"
+    fi
+    trap 'exit 0' INT TERM HUP
+    while true; do
+        printf '%s\n' "$(monotonic_seconds)" > "$SYS_PROGRESS_FILE"
+        source_error=""
+        if ! sync_sys_log_source_to_ram; then
+            source_error="sys-log-sync-failed"
+        fi
+        printf '%s\n' "$source_error" > "$RUNTIME_DIR/source.status.tmp.$$"
+        mv -f "$RUNTIME_DIR/source.status.tmp.$$" "$RUNTIME_DIR/source.status"
+        sleep "$RAM_POLL_INTERVAL_SECS"
+    done
+}
+
+check_worker_progress() {
+    checked_pid="$1"
+    checked_progress_file="$2"
+    checked_last_progress="$3"
+    checked_error_prefix="$4"
+    checked_identity="$5"
+    checked_error=""
+    checked_progress=""
+    if [ -f "$checked_progress_file" ]; then
+        read -r checked_progress < "$checked_progress_file" || true
+    fi
+    case "$checked_progress" in
+        ''|*[!0-9]*) ;;
+        *) checked_last_progress="$checked_progress" ;;
+    esac
+    checked_now="$(monotonic_seconds)"
+    if ! worker_is_owned "$checked_pid" "$checked_identity"; then
+        checked_error="${checked_error_prefix}-worker-stopped"
+    elif [ $((checked_now - checked_last_progress)) -ge "$STORAGE_TIMEOUT_SECS" ]; then
+        stop_owned_worker "$checked_pid" "$checked_identity"
+        checked_error="${checked_error_prefix}-timeout"
+    fi
+}
+
+publish_guard_status() {
+    guard_ram_size="$(ram_log_size_bytes 2>/dev/null || printf '0')"
+    guard_sys_size="$(sys_ram_log_size_bytes 2>/dev/null || printf '0')"
+    if [ -n "$guard_error" ] || [ ! -f "$guard_runtime_dir/storage.status" ]; then
+        write_status "WAITING" "$DEFAULT_TARGET" "-" "-" "-" \
+            "${guard_error:-storage-starting}" "$RAM_LOG_FILE" "-" "-" \
+            "$guard_ram_size" "0" "0" "-" "-" "0" "$guard_sys_size"
+        return
+    fi
+
+    # Only the RAM supervisor publishes public status. Refresh actual sizes
+    # and heartbeat even when storage is slow; the worker writes a private file.
+    guard_status_tmp="${STATUS_FILE}.tmp.$$"
+    awk -v ram="$guard_ram_size" -v sys="$guard_sys_size" \
+        -v stamp="$(timestamp)" -v epoch="$(date '+%s')" '
+        /^RAM_LOG_SIZE_BYTES=/ { print "RAM_LOG_SIZE_BYTES=" ram; next }
+        /^SYS_LOG_SIZE_BYTES=/ { print "SYS_LOG_SIZE_BYTES=" sys; next }
+        /^UPDATED_AT=/ { print "UPDATED_AT=" stamp; next }
+        /^UPDATED_AT_EPOCH=/ { print "UPDATED_AT_EPOCH=" epoch; next }
+        { print }
+    ' "$guard_runtime_dir/storage.status" > "$guard_status_tmp" || return 1
+    mv -f "$guard_status_tmp" "$STATUS_FILE"
+}
+
+guard_sleep() {
+    # A broken PATH sleep must not turn RAM protection into a busy loop.
+    # On the target BusyBox supplies an independent, absolute-path fallback.
+    sleep "$RAM_POLL_INTERVAL_SECS" && return 0
+    [ "$guard_stop_requested" = 0 ] || return 0
+    /bin/busybox sleep "$RAM_POLL_INTERVAL_SECS" && return 0
+    # The installed service restarts us with RestartSec=5 if both timers fail.
+    printf 'Log-manager timers failed; requesting service restart\n' >&2
+    exit 1
+}
+
+prepare_guard_runtime() {
+    mkdir -p "$(dirname "$STATUS_FILE")" || return 1
+    if [ -z "$guard_runtime_dir" ]; then
+        guard_runtime_dir="$(mktemp -d "${STATUS_FILE}.runtime.XXXXXX")" || {
+            guard_runtime_dir=""
+            return 1
+        }
+    fi
+    printf '0\n' > "$guard_runtime_dir/app.generation" || return 1
+    printf '0\n' > "$guard_runtime_dir/sys.generation" || return 1
+}
+
+retired_worker_present() {
+    retired_pid="$1"
+    retired_identity="$2"
+    [ -n "$retired_pid" ] || return 1
+    # Presence checks never signal a retired PID. Include the entire old group:
+    # a killed shell may leave an I/O command in uninterruptible kernel sleep.
+    # Even a reused group can only delay recovery, never kill another process.
+    kill -0 "-$retired_pid" 2>/dev/null && return 0
+    if [ -z "$retired_identity" ] || [ "$retired_identity" = '-' ]; then
+        [ -d "/proc/$retired_pid" ]
+        return "$?"
+    fi
+    [ "$(read_process_identity "$retired_pid" 2>/dev/null)" = "$retired_identity" ]
+}
+
+maintain_guard_worker() {
+    maintained_kind="$1"
+    maintained_pid="$2"
+    maintained_identity="$3"
+    maintained_progress="$4"
+    maintained_error="$5"
+    maintained_retry_at="$6"
+    maintained_retired_pid="$7"
+    maintained_retired_identity="$8"
+    if [ "$maintained_kind" = storage ]; then
+        maintained_progress_file="$guard_runtime_dir/progress"
+        maintained_error_prefix=target-storage
+    else
+        maintained_progress_file="$guard_runtime_dir/source.progress"
+        maintained_error_prefix=sys-log-copy
+    fi
+
+    if [ -n "$maintained_pid" ]; then
+        check_worker_progress "$maintained_pid" "$maintained_progress_file" \
+            "$maintained_progress" "$maintained_error_prefix" "$maintained_identity"
+        maintained_progress="$checked_last_progress"
+        maintained_error="$checked_error"
+        if [ -n "$maintained_error" ]; then
+            maintained_retired_pid="$maintained_pid"
+            maintained_retired_identity="$maintained_identity"
+            maintained_pid=""
+            maintained_identity=""
+            maintained_retry_at=$((guard_now + WORKER_RETRY_SECS))
+        fi
+    fi
+    [ -z "$maintained_pid" ] || return 0
+    [ "$guard_now" -ge "$maintained_retry_at" ] || return 0
+    if retired_worker_present "$maintained_retired_pid" "$maintained_retired_identity"; then
+        return 0
+    fi
+    maintained_retired_pid=""
+    maintained_retired_identity=""
+    maintained_retry_at=$((guard_now + WORKER_RETRY_SECS))
+    # Remove an old heartbeat before launching; a failed IPC write is retried
+    # later while the supervisor keeps trimming both buffers.
+    if ! printf '%s\n' "$guard_now" > "$maintained_progress_file"; then
+        maintained_error="${maintained_error_prefix}-runtime-unavailable"
+        return 0
+    fi
+    if [ "$maintained_kind" = storage ]; then
+        rm -f "$guard_runtime_dir/storage.status" || return 0
+        LOG_SCRIPT_STATUS_FILE="$guard_runtime_dir/storage.status" \
+        LOG_STORAGE_PROGRESS_FILE="$maintained_progress_file" \
+        LOG_MANAGER_RUNTIME_DIR="$guard_runtime_dir" \
+            setsid /bin/sh "$0" --storage-worker >/dev/null 2>&1 &
+    else
+        rm -f "$guard_runtime_dir/source.status" || return 0
+        LOG_SYS_PROGRESS_FILE="$maintained_progress_file" \
+        LOG_MANAGER_RUNTIME_DIR="$guard_runtime_dir" \
+            setsid /bin/sh "$0" --sys-worker >/dev/null 2>&1 &
+    fi
+    maintained_pid=$!
+    maintained_identity="$(read_process_identity "$maintained_pid")"
+    maintained_progress="$guard_now"
+    maintained_error=""
+}
+
+ram_guard_loop() {
+    # These are polling/deadline values, not arbitrary shell expressions.
+    for guard_value in "$MAX_RAM_LOG_BYTES" "$RAM_POLL_INTERVAL_SECS" \
+        "$POLL_INTERVAL_SECS" "$STORAGE_TIMEOUT_SECS" "$WORKER_RETRY_SECS"; do
+        case "$guard_value" in
+            ''|*[!0-9]*) printf 'Invalid log-manager size or interval\n' >&2; exit 1 ;;
+        esac
+        [ "$guard_value" -gt 0 ] || exit 1
+    done
+    [ "$STORAGE_TIMEOUT_SECS" -gt "$POLL_INTERVAL_SECS" ] || {
+        printf 'Storage timeout must exceed the storage poll interval\n' >&2
+        exit 1
+    }
+    [ "$STORAGE_TIMEOUT_SECS" -gt "$RAM_POLL_INTERVAL_SECS" ] || exit 1
+
+    guard_worker_pid=""
+    guard_worker_identity=""
+    guard_source_pid=""
+    guard_source_identity=""
+    guard_runtime_dir=""
+    trap guard_cleanup EXIT
+    guard_stop_requested=0
+    # Defer shutdown until child identities are captured, including signals
+    # received between launching a worker and recording its start time.
+    trap 'guard_stop_requested=1' INT TERM HUP
+    guard_runtime_ready=0
+    guard_runtime_retry_at=0
+    guard_last_progress=0
+    guard_source_last_progress=0
+    guard_worker_error=""
+    guard_source_error=""
+    guard_worker_retry_at=0
+    guard_source_retry_at=0
+    guard_worker_retired_pid=""
+    guard_worker_retired_identity=""
+    guard_source_retired_pid=""
+    guard_source_retired_identity=""
+
+    while true; do
+        guard_error=""
+        if ! ensure_ram_log_file; then
+            guard_error="ram-log-unavailable"
+        elif ! trim_ram_log_to_limit; then
+            guard_error="ram-log-trim-failed"
+        fi
+
+        if ! ensure_sys_ram_log_file; then
+            guard_error="${guard_error:-sys-ram-log-unavailable}"
+        else
+            # This loop performs no source reads or storage writes. Both kinds
+            # of I/O run in separate workers with independent progress checks.
+            if ! trim_sys_ram_log_to_limit; then
+                guard_error="${guard_error:-sys-ram-log-trim-failed}"
+            fi
+        fi
+
+        guard_now="$(monotonic_seconds)"
+        if [ "$guard_runtime_ready" = 0 ] &&
+           [ "$guard_now" -ge "$guard_runtime_retry_at" ]; then
+            guard_runtime_retry_at=$((guard_now + WORKER_RETRY_SECS))
+            if prepare_guard_runtime; then
+                guard_runtime_ready=1
+            fi
+        fi
+        if [ "$guard_runtime_ready" = 1 ]; then
+            maintain_guard_worker storage "$guard_worker_pid" "$guard_worker_identity" \
+                "$guard_last_progress" "$guard_worker_error" "$guard_worker_retry_at" \
+                "$guard_worker_retired_pid" "$guard_worker_retired_identity"
+            guard_worker_pid="$maintained_pid"
+            guard_worker_identity="$maintained_identity"
+            guard_last_progress="$maintained_progress"
+            guard_worker_error="$maintained_error"
+            guard_worker_retry_at="$maintained_retry_at"
+            guard_worker_retired_pid="$maintained_retired_pid"
+            guard_worker_retired_identity="$maintained_retired_identity"
+
+            maintain_guard_worker source "$guard_source_pid" "$guard_source_identity" \
+                "$guard_source_last_progress" "$guard_source_error" "$guard_source_retry_at" \
+                "$guard_source_retired_pid" "$guard_source_retired_identity"
+            guard_source_pid="$maintained_pid"
+            guard_source_identity="$maintained_identity"
+            guard_source_last_progress="$maintained_progress"
+            guard_source_error="$maintained_error"
+            guard_source_retry_at="$maintained_retry_at"
+            guard_source_retired_pid="$maintained_retired_pid"
+            guard_source_retired_identity="$maintained_retired_identity"
+        else
+            guard_error="${guard_error:-runtime-unavailable}"
+        fi
+        guard_error="${guard_error:-$guard_worker_error}"
+        guard_error="${guard_error:-$guard_source_error}"
+        if [ -z "$guard_error" ] && [ -f "$guard_runtime_dir/source.status" ]; then
+            read -r guard_error < "$guard_runtime_dir/source.status" || true
+        fi
+        # A full /run must not terminate RAM maintenance due to a status error.
+        publish_guard_status || true
+        [ "$guard_stop_requested" = 0 ] || exit 0
+        guard_sleep
+        [ "$guard_stop_requested" = 0 ] || exit 0
+    done
+}
+
+case "${1:-}" in
+    --storage-worker)
+        [ -n "$STORAGE_PROGRESS_FILE" ] && [ -n "$RUNTIME_DIR" ] || exit 1
+        monitor_loop
+        ;;
+    --sys-worker)
+        [ -n "$SYS_PROGRESS_FILE" ] && [ -n "$RUNTIME_DIR" ] || exit 1
+        source_loop
+        ;;
+    '') ram_guard_loop ;;
+    *) printf 'Unknown log-manager argument\n' >&2; exit 1 ;;
+esac
