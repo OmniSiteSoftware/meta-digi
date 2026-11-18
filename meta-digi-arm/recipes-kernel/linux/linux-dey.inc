@@ -14,14 +14,17 @@ DEPENDS += "${@oe.utils.conditional('DEY_SOC_VENDOR', 'NXP', 'lzop-native', '', 
 LINUX_URI_STASH = "git@github.com:OmniSiteSoftware/linux-kernel-yocto.git;protocol=ssh;name=kernel"
 LINUX_URI_GITHUB = "https://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;name=kernel"
 LINUX_GIT_URI ?= "${@oe.utils.conditional('DIGI_INTERNAL_GIT', '1', '${LINUX_URI_STASH}', '${LINUX_URI_GITHUB}', d)}"
+WINGS_KERNEL_BRANCH ?= "kernel-mipi"
+WINGS_KERNEL_BRANCH:ccmp15 = "kernel-mipi_1gb"
 SRC_URI = " \
-    git://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;branch=kernel-mipi;name=kernel \
+    git://github.com/OmniSiteSoftware/linux-kernel-yocto.git;protocol=https;branch=${WINGS_KERNEL_BRANCH};name=kernel \
     ${@oe.utils.conditional('KERNEL_DEFCONFIG', '', 'file://defconfig', '', d)} \
     ${@bb.utils.contains('DISTRO_FEATURES', 'virtualization', 'file://docker_conf.cfg', '', d)} \
     ${@oe.utils.vartrue('TRUSTFENCE_FILE_BASED_ENCRYPT', 'file://fscrypt.cfg', '', d)} \
 "
 
 SRCREV_kernel =  "${AUTOREV}"
+SRCREV_kernel:ccmp15 = "675098a6bcffd9360f927efc2da5ad9503812567"
 SRCREV_FORMAT = "kernel"
 
 S = "${WORKDIR}/git"

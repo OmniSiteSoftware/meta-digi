@@ -7,6 +7,7 @@ DEPENDS += "flex-native bison-native"
 DEPENDS += "python3-setuptools-native"
 
 SRCBRANCH = "read_only_uboot"
+SRCBRANCH:ccmp15 = "read_only_uboot_1gb"
 #SRCREV = "${AUTOREV}"
 
 SRC_URI = " \
@@ -17,6 +18,7 @@ SRC_URI = " \
     ${@oe.utils.conditional('TRUSTFENCE_SIGN_FIT_STM', '1', 'file://fit_signature.cfg', '', d)} \
 "
 SRCREV_bootloader =  "${AUTOREV}"
+SRCREV_bootloader:ccmp15 = "d7678353200ed4d174b9d94da3a0c96a91189532"
 SRCREV_FORMAT = "bootloader"
 
 install_helper_files() {

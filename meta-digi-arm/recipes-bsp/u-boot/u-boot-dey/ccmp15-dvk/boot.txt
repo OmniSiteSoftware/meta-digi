@@ -73,6 +73,8 @@ if test "${module_has_wifi}" = "1" && test -z "${disable_wifi}"; then
 	setenv overlays _ov_som_wifi_ccmp15.dtbo,${overlays}
 fi
 
+# Rev D uses its own base DTB; Digi carrier overlays describe different hardware.
+if test "${wings_board}" != "revd"; then
 # Apply DVKv1 overlay if the board_version is 1
 if test -z "${board_version}" || test "${board_version}" -eq "1"; then
 	setenv overlays _ov_board_v1_ccmp15-dvk.dtbo,${overlays}
@@ -81,6 +83,7 @@ fi
 # Apply DVKv2 overlay if the board_version is 2
 if test "${board_version}" -eq "2"; then
 	setenv overlays _ov_board_v2_ccmp15-dvk.dtbo,${overlays}
+fi
 fi
 
 # Winstar / Okaya display on Omnisite Brain

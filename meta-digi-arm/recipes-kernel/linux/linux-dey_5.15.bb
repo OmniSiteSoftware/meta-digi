@@ -4,6 +4,7 @@ require recipes-kernel/linux/linux-dey.inc
 
 SRCBRANCH = "master"
 SRCBRANCH:stm32mpcommon = "master"
+SRCBRANCH:ccmp15 = "kernel-mipi_1gb"
 SRCREV = "${AUTOREV}"
 SRCREV:stm32mpcommon = "${AUTOREV}"
 
