@@ -19,7 +19,7 @@ SRC_URI = " \
 
 # Always fetch the latest commit from the branch.
 SRCREV = "${AUTOREV}"
-SRCREV:ccmp15 = "9a5f03b5de7b2de4f2d258bb14dc6a3d0a0cd130"
+SRCREV:ccmp15 = "e34a0f8a3990cb551e0db6d9a0dae63642e527fe"
 PV = "1.0+git${SRCPV}"
 
 # Use the Makefile build system.

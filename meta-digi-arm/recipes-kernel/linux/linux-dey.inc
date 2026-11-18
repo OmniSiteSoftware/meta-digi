@@ -24,7 +24,7 @@ SRC_URI = " \
 "
 
 SRCREV_kernel =  "${AUTOREV}"
-SRCREV_kernel:ccmp15 = "675098a6bcffd9360f927efc2da5ad9503812567"
+SRCREV_kernel:ccmp15 = "d58dea6f89dcfb20f2e37cdee5a8af80b6d1a2ff"
 SRCREV_FORMAT = "kernel"
 
 S = "${WORKDIR}/git"
