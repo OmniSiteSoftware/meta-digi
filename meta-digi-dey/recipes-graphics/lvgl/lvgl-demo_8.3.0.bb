@@ -5,7 +5,7 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=802d3d83ae80ef5f343050bf96cce3a4 \
                     file://lvgl/LICENCE.txt;md5=bf1198c89ae87f043108cea62460b03a"
 
 SRCBRANCH ?= "master_stage"
-SRCBRANCH:ccmp15 = "ishanya-daily-trustfence_1gb"
+SRCBRANCH:ccmp15 = "master_stage_1gb"
 
 SRC_URI = " \
     gitsm://git@github.com/OmniSiteSoftware/WingsApp.git;branch=${SRCBRANCH};protocol=ssh \
@@ -19,7 +19,7 @@ SRC_URI = " \
 
 # Always fetch the latest commit from the branch.
 SRCREV = "${AUTOREV}"
-SRCREV:ccmp15 = "e34a0f8a3990cb551e0db6d9a0dae63642e527fe"
+SRCREV:ccmp15 = "da0557a38a1e451ef7b9081eea7937dcc5421988"
 PV = "1.0+git${SRCPV}"
 
 # Use the Makefile build system.
