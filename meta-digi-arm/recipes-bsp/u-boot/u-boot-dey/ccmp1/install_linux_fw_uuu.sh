@@ -84,7 +84,7 @@ echo "############################################################"
 # -b, -d, -n (booleans)
 # -f <fip-filename>
 # -i <image-name>
-while getopts 'a:bdf:hi:n' c
+while getopts 'a:bdf:hi:nt' c
 do
 	case $c in
 	a) INSTALL_ATF_FILENAME=${OPTARG} ;;
