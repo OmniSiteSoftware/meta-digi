@@ -20,12 +20,16 @@ DEPENDS += "${@oe.utils.ifelse(d.getVar('SWUPDATE_IS_RDIFF_UPDATE') == 'true', '
 ###### SWU Update based on files ######
 #######################################
 
+# Generic file updates retain their historical metadata. Application-only
+# builds explicitly disable it, since the installed BSP is not being replaced.
+SWUPDATE_FILES_INCLUDE_SW_VERSIONS ?= "1"
+
 create_swupdate_targz_file() {
 	local targzfile="${DEPLOY_DIR_IMAGE}/${SWUPDATE_FILES_TARGZ_FILE_NAME}"
 	# Clean previous versions of the file.
 	rm -f "${targzfile}"
 
-	# Create the tar file including the 'sw-versions' file, as it is mandatory.
+	# Application-only archives must not replace the installed BSP metadata.
 	if [ "${SWUPDATE_FILES_TARGZ_FILE}" != "" ]; then
 		# User provides a custom tar.gz file. Copy it to distribution dir.
 		cp "${SWUPDATE_FILES_TARGZ_FILE}" "${targzfile}"
@@ -36,11 +40,15 @@ create_swupdate_targz_file() {
 			exit 1
 		fi
 		gunzip "${targzfile}"
-		# Add the 'sw-versions' file.
-		tar -C "${IMAGE_ROOTFS}" -uf "${targzfile%.*}" etc/sw-versions
+        if [ "${SWUPDATE_FILES_INCLUDE_SW_VERSIONS}" = "1" ]; then
+            tar -C "${IMAGE_ROOTFS}" -uf "${targzfile%.*}" etc/sw-versions
+        fi
 	else
-		# The tar.gz file is not provided by user. Create it including the 'sw-versions' file
-		tar -C "${IMAGE_ROOTFS}" -cf "${targzfile%.*}" etc/sw-versions
+        if [ "${SWUPDATE_FILES_INCLUDE_SW_VERSIONS}" = "1" ]; then
+            tar -C "${IMAGE_ROOTFS}" -cf "${targzfile%.*}" etc/sw-versions
+        else
+            tar -cf "${targzfile%.*}" --files-from /dev/null
+        fi
 	fi
 
 	# Iterate the list of files and folders. Add all entries directly except paths starting
