@@ -28,7 +28,7 @@ ROOTFS_DEV_BLOCK="/dev/mmcblk0p3"
 ROOTFS_MOUNT_POINT="/system"
 OTA_STATUS_DIR="/etc/wings/fw-update"
 OTA_STATUS_FILE="${OTA_STATUS_DIR}/software-update-status.json"
-OTA_IMAGE_EXPECTED_VERSION="@@DEY_BSP_VERSION@@"
+OTA_IMAGE_EXPECTED_VERSION="@@DEY_FIRMWARE_VERSION@@"
 
 timestamp_utc() {
 	date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
@@ -43,11 +43,6 @@ read_ota_status_field() {
 
 	[ -r "${OTA_STATUS_FILE}" ] || return 1
 	sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\{0,1\\}\\([^\",}]*\\)\"\\{0,1\\}.*/\\1/p" "${OTA_STATUS_FILE}" | head -n 1
-}
-
-read_installed_bsp_version() {
-	[ -r /etc/sw-versions ] || return 1
-	sed -n 's/^bsp[[:space:]]\+\([^[:space:]]\+\).*/\1/p' /etc/sw-versions | head -n 1
 }
 
 write_ota_status() {
@@ -69,7 +64,7 @@ write_ota_status() {
 		update_id="${started_at}-${component}"
 		package_name="${WINGS_OTA_PACKAGE_NAME:-}"
 		expected_version="${WINGS_OTA_EXPECTED_VERSION:-${OTA_IMAGE_EXPECTED_VERSION}}"
-		current_version="$(read_installed_bsp_version || true)"
+		current_version=""
 	else
 		source="$(read_ota_status_field source || true)"
 		started_at="$(read_ota_status_field started_at || true)"
@@ -90,10 +85,9 @@ write_ota_status() {
 		echo "Preserving existing terminal OTA status for ${update_id}"
 		return 0
 	fi
-	if [ "${status}" != "running" ] || [ -z "${current_version}" ]; then
-		installed_version="$(read_installed_bsp_version || true)"
-		[ -n "${installed_version}" ] && current_version="${installed_version}"
-	fi
+    # The hook cannot query the newly running application before reboot.
+    # WingsApp fills and verifies its compiled version after startup; the BSP
+    # version must never be reported as an application version.
 	rc_json="${rc}"
 	error_stage_json="null"
 	completed_at_json="null"
